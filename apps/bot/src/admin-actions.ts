@@ -78,7 +78,12 @@ export async function performModerationAction(bot: Bot, submissionId: string, mo
           // Same gate + defaults as the wizard path; a quarantined API post with a link
           // satisfies its How/Tickets/Source anchor through factDefaults.
           factValues: parseFacts(hidden.factsJson),
-          linkUrl: hidden.linkUrl
+          linkUrl: hidden.linkUrl,
+          // Phase 3 stored choices survive the quarantine round-trip (wizard →
+          // submission row → approval here), so approving publishes exactly what
+          // the author previewed.
+          ...(hidden.seriesKey ? { seriesKey: hidden.seriesKey } : {}),
+          captionAbove: hidden.captionAbove === true,
         });
         post = await db.post.update({
           where: { id: hidden.id },
@@ -109,7 +114,9 @@ export async function performModerationAction(bot: Bot, submissionId: string, mo
           // Wizard-collected fact fields ride along so the gate sees the same values the
           // author filled (and the preview showed) before quarantine.
           factValues: parseFacts(submission.factsJson),
-          linkUrl
+          linkUrl,
+          ...(submission.seriesKey ? { seriesKey: submission.seriesKey } : {}),
+          captionAbove: submission.captionAbove === true,
         });
         post = await db.post.create({
           data: {

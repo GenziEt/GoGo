@@ -11,7 +11,7 @@ import { t, type Locale } from "./i18n.js";
 import { getSession, setSession, clearSession, abandonOpenWork, isTextInputStep, isSkipAllowedStep, setPreferCard, setCaptionAbove, peekCaptionAbove, setSeriesKey, peekSeriesKey } from "./session-store.js";
 import { publishToChannel, deleteChannelMessage, requiredFactFieldsFor } from "./telegram-publisher.js";
 import { buildChannelCaption, buildChannelButtons, parsePlatformLink, attachChannelButtons, withButtonStyle } from "./post-buttons.js";
-import { isStructuralLayout, themeFor, factDefaults, missingFactFieldsAfterDefaults, brandChipLine, SERIES, type FactFieldSpec } from "./post-theme.js";
+import { isStructuralLayout, themeFor, factDefaults, missingFactFieldsAfterDefaults, brandChipLine, seriesFor, SERIES, type FactFieldSpec } from "./post-theme.js";
 import { renderCard, clampTitle } from "./card-renderer.js";
 import { InputFile } from "grammy";
 import { logger } from "./logger.js";
@@ -162,6 +162,16 @@ async function finalizeToPreview(
   categoryKey: string,
   locale: Locale,
 ): Promise<void> {
+  // Every post visits the optional series step before preview — a "Monday Money
+  // Moves" opportunity must be able to carry its series chip just like a music
+  // drop (§3 series visual spec applies to all categories). Guarded by session
+  // step so it runs exactly once per submission: the cat:/factsdone handlers
+  // route structural posts through "facts" first, and the series handler lands
+  // here with step === "series".
+  if ((await getSession(ctx.from!.id))?.step !== "series") {
+    await askSeries(ctx, submission.id, locale);
+    return;
+  }
   const facts = effectiveFacts(categoryKey, submission);
   const normalized = normalizePost({
     title: submission.title,
@@ -489,6 +499,11 @@ export function registerPostFlow(bot: Bot): void {
         linkPlatform: submission.linkPlatform,
         factValues: effectiveFacts(normalized.category, submission),
         submissionId,
+        // Re-render must keep showing the stored Phase 3 choices — otherwise the
+        // preview silently reverts to default caption position / no series chip
+        // after a card toggle.
+        seriesKey: await peekSeriesKey(submissionId),
+        captionAbove: await peekCaptionAbove(submissionId),
       },
       choice === "genzi",
     );
@@ -686,6 +701,10 @@ export function registerPostFlow(bot: Bot): void {
         // them against post-theme.ts before anything reaches the channel.
         factValues: parseFacts(submission.factsJson),
         linkUrl,
+        // Phase 3 stored wizard choices ride to Telegram itself (the preview already
+        // showed them): caption position for media posts and the series chip line.
+        ...(submission.seriesKey ? { seriesKey: submission.seriesKey } : {}),
+        captionAbove: submission.captionAbove === true,
         // Branded card controls (plan §2.3): no media → card is generated and attached;
         // media present → author's stored choice decides ("use mine" wins unless preferCard).
         cardSlug,
@@ -715,6 +734,10 @@ export function registerPostFlow(bot: Bot): void {
           // Persist the structured fact block so re-publishes, admin approvals, and the
           // Phase 2 card renderer can rebuild it without re-asking the author.
           factsJson: submission.factsJson,
+          // Same persistence rationale for the Phase 3 wizard choices: a later
+          // re-publish or audit can rebuild the exact caption position + series chip.
+          seriesKey: submission.seriesKey,
+          captionAbove: submission.captionAbove,
           linkUrl,
           linkPlatform,
           readingMinutes: locked.metadata.readingMinutes,
