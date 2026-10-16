@@ -18,6 +18,7 @@ import { InlineKeyboard } from "grammy";
 import { env } from "./config.js";
 import { logger } from "./logger.js";
 import type { Locale } from "./i18n.js";
+import { brandChipLine, CAPTION_DIVIDER_WIDTH } from "./post-theme.js";
 
 // --- Button colours ---------------------------------------------------------------
 // Bot API 9.4 `style` field: "success" = green, "primary" = blue, "danger" = red. Clients
@@ -119,10 +120,22 @@ export function formatPostDate(date: Date, locale: Locale): string {
 // <code> = prices/dates (auto-detected, max 3 per post); <blockquote> = TL;DR on long posts.
 
 // One dash character only (the old divider mixed ─ and —, which rendered unevenly).
-export const CAPTION_DIVIDER = "━━━━━━━━━━━━";
+// Width comes from the theme's spacing/divider token — never a literal here.
+export const CAPTION_DIVIDER = "━".repeat(CAPTION_DIVIDER_WIDTH);
 
-function brandHeader(): string {
-  return `🇪🇹 <b>GENZI</b> · <i>${env.GENZI_CHANNEL_USERNAME ? `@${env.GENZI_CHANNEL_USERNAME}` : "Ethiopia's Gen Z pulse"}</i>`;
+// Category-aware brand chip: "🇪🇹 GENZI · 💰 OPPORTUNITY" instead of the same bare
+// line on every post (Phase 1). Telegram's caption parser only accepts a fixed tag
+// set and DROPS <span style> silently, so the chip stays plain-formatted here —
+// the category COLOR is applied by the Phase 2 card renderer, which reads tokens
+// directly from post-theme.ts. The channel-handle variant is kept for posts whose
+// category is unknown (legacy rows), preserving the old look exactly.
+function brandHeader(category?: string, locale: Locale = "en"): string {
+  if (!category) {
+    return `🇪🇹 <b>GENZI</b> · <i>${env.GENZI_CHANNEL_USERNAME ? `@${env.GENZI_CHANNEL_USERNAME}` : "Ethiopia's Gen Z pulse"}</i>`;
+  }
+  const chip = brandChipLine(category, locale);
+  const [mark, rest] = chip.split(" · ");
+  return `<b>${mark}</b> · <b>${rest ?? ""}</b>`;
 }
 
 // First sentence of a long body, capped, used as the TL;DR quote. Returns "" for short posts.
@@ -165,11 +178,15 @@ export interface CaptionInput {
   readingMinutes: number;
   publishedAt: Date;
   location?: string;
+  // Category key (see categories.ts). Drives the header chip — "🇪🇹 GENZI · 💰 OPPORTUNITY"
+  // instead of one identical brand line on every post. Omitted = legacy brand line.
+  category?: string;
+  locale?: Locale;
   escapeHtml: (value: string) => string;
 }
 
 // The caption in three blocks so the publisher can split long posts without cutting HTML:
-//   head = brand line + bold title (+ TL;DR quote), tail = tags/location + dated footer.
+//   head = brand chip + bold title (+ TL;DR quote), tail = tags/location + dated footer.
 export function buildCaptionParts(input: CaptionInput): { head: string; body: string; tail: string } {
   const esc = input.escapeHtml;
   const tldr = buildTldr(input.body);
@@ -179,7 +196,7 @@ export function buildCaptionParts(input: CaptionInput): { head: string; body: st
   const date = formatPostDate(input.publishedAt, "en");
   const footer = `\n\n${CAPTION_DIVIDER}\n👤 ${esc(input.author)} · 📅 ${date} · 📚 ${input.readingMinutes} min read`;
   return {
-    head: `${brandHeader()}\n\n<b>${esc(input.title)}</b>${quote}`,
+    head: `${brandHeader(input.category, input.locale ?? "en")}\n\n<b>${esc(input.title)}</b>${quote}`,
     body: highlightKeyFacts(esc(input.body)),
     tail: `${tagLine}${locationLine}${footer}`,
   };
@@ -198,7 +215,9 @@ export function buildChannelCaptionPlain(input: Omit<CaptionInput, "escapeHtml">
   const locationLine = input.location ? `\n📍 ${input.location}` : "";
   const date = formatPostDate(input.publishedAt, "en");
   const footer = `\n\n${CAPTION_DIVIDER}\n👤 ${input.author} · 📅 ${date} · 📚 ${input.readingMinutes} min read`;
-  return `🇪🇹 GENZI\n\n${input.title}\n\n${input.body}${tagLine}${locationLine}${footer}`;
+  // Same category chip as the HTML caption — brandChipLine returns plain text already.
+  const head = input.category ? brandChipLine(input.category, input.locale ?? "en") : "🇪🇹 GENZI";
+  return `${head}\n\n${input.title}\n\n${input.body}${tagLine}${locationLine}${footer}`;
 }
 
 // --- Keyboard ---------------------------------------------------------------------

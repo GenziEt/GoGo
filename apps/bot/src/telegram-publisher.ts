@@ -17,6 +17,8 @@ type PublishInput = {
   mediaFileId?: string;
   location?: string;
   readingMinutes?: number;
+  // Category key drives the header chip (Phase 1). Optional for legacy callers.
+  category?: string;
 };
 
 // Telegram hard limits: 4096 chars per text message, 1024 per media caption. The post wizard
@@ -50,6 +52,7 @@ function premiumCaption(input: PublishInput): string {
     readingMinutes: input.readingMinutes ?? Math.max(1, Math.ceil(input.body.split(/\s+/).filter(Boolean).length / 180)),
     publishedAt: new Date(),
     ...(input.location ? { location: input.location } : {}),
+    ...(input.category ? { category: input.category } : {}),
     escapeHtml,
   });
 }
@@ -103,6 +106,7 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
     readingMinutes: input.readingMinutes ?? Math.max(1, Math.ceil(input.body.split(/\s+/).filter(Boolean).length / 180)),
     publishedAt: new Date(),
     ...(input.location ? { location: input.location } : {}),
+    ...(input.category ? { category: input.category } : {}),
     escapeHtml,
   });
   const budget = hasMedia ? CAPTION_LIMIT : TEXT_CHUNK;

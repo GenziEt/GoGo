@@ -77,6 +77,8 @@ function buildPreview(post: Normalized, locale: Locale, ctxInfo: PreviewContext,
     readingMinutes: post.readingMinutes,
     publishedAt: new Date(),
     ...(post.location ? { location: post.location } : {}),
+    category: post.category,
+    locale,
     escapeHtml,
   });
   let caption = render(post.body);
@@ -296,6 +298,7 @@ export function registerPostFlow(bot: Bot): void {
         ...(locked.media.type ? { mediaType: locked.media.type } : {}),
         ...(locked.media.fileId ? { mediaFileId: locked.media.fileId } : {}),
         ...(locked.metadata.location ? { location: locked.metadata.location } : {}),
+        category: locked.metadata.category,
         readingMinutes: locked.metadata.readingMinutes,
       });
     } catch (error) {
