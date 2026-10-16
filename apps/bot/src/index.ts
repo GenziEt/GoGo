@@ -2122,7 +2122,7 @@ app.post("/api/posts", telegramAuth, async (req: Request, res: Response) => {
   let telegramChatId: string | null = null;
   try {
     const publication = await publishToChannel(bot, {
-      title, body, tags, author: user.firstName ?? "GENZI", readingMinutes,
+      title, body, tags, author: user.firstName ?? "GENZI", readingMinutes, category,
       ...(mediaType && mediaFileId ? { mediaType, mediaFileId } : {}),
       ...(location ? { location } : {})
     });

@@ -55,6 +55,7 @@ export async function performModerationAction(bot: Bot, submissionId: string, mo
           author: hidden.authorName ?? authorName,
           ...(hidden.mediaType && hidden.mediaFileId ? { mediaType: hidden.mediaType, mediaFileId: hidden.mediaFileId } : {}),
           ...(hidden.location ? { location: hidden.location } : {}),
+          category: hidden.category,
           readingMinutes: hidden.readingMinutes
         });
         post = await db.post.update({
@@ -81,6 +82,7 @@ export async function performModerationAction(bot: Bot, submissionId: string, mo
           ...(locked.media.type ? { mediaType: locked.media.type } : {}),
           ...(locked.media.fileId ? { mediaFileId: locked.media.fileId } : {}),
           ...(locked.metadata.location ? { location: locked.metadata.location } : {}),
+          category: locked.metadata.category,
           readingMinutes: locked.metadata.readingMinutes
         });
         post = await db.post.create({
