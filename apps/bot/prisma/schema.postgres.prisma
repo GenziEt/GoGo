@@ -1,0 +1,863 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  MODERATOR
+  OWNER
+}
+
+enum Locale {
+  AMHARIC
+  ENGLISH
+}
+
+enum SubmissionState {
+  INPUT
+  PREPARING
+  PREVIEW
+  DRAFT
+  PUBLISHED
+  QUARANTINED
+  REJECTED
+}
+
+enum ModerationAction {
+  ALLOW
+  QUARANTINE
+  REJECT
+  RESTRICT
+  BAN
+}
+
+model User {
+  id                   String                @id @default(cuid())
+  telegramId           String                @unique
+  username             String?
+  firstName            String?
+  lastName             String?
+  role                 Role                  @default(USER)
+  locale               Locale                @default(AMHARIC)
+  blocked              Boolean               @default(false)
+  restrictedUntil      DateTime?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  posts                Post[]
+  submissions          Submission[]
+  sessions             ConversationSession[]
+  moderationReports    ModerationEvent[]     @relation("TargetUser")
+  moderationActions    ModerationEvent[]     @relation("Moderator")
+  postReports          PostReport[]
+  comments             PostComment[]
+  bookmarks            Bookmark[]
+  feedEvents           FeedEvent[]
+  followers            Follow[]              @relation("FollowedUser")
+  following            Follow[]              @relation("FollowerUser")
+  ownedCommunities     Community[]           @relation("CommunityOwner")
+  communityMemberships CommunityMember[]
+  opportunities        Opportunity[]         @relation("OpportunityOwner")
+  opportunitySaves     OpportunitySave[]
+  notifications        Notification[]
+  actedNotifications   Notification[]        @relation("NotificationActor")
+  ownedEvents          Event[]               @relation("EventOwner")
+  eventRsvps           EventRSVP[]
+  polls                Poll[]                @relation("PollOwner")
+  pollVotes            PollVote[]
+  quizzes              Quiz[]                @relation("QuizOwner")
+  quizAnswers          QuizAnswer[]
+  bio                  String?
+  avatarFileId         String?
+  xp                   Int                   @default(0)
+  level                Int                   @default(1)
+  currentStreak        Int                   @default(0)
+  longestStreak        Int                   @default(0)
+  lastActiveDate       String?
+  xpEvents             XpEvent[]
+  badges               UserBadge[]
+  wallet               Wallet?
+  sentTips             Tip[]                 @relation("TipSender")
+  receivedTips         Tip[]                 @relation("TipRecipient")
+  subscriptions        CreatorSubscription[] @relation("Subscriber")
+  subscribers          CreatorSubscription[] @relation("Creator")
+  walletTransactions   WalletTransaction[]
+  purchases            ContentPurchase[]
+  referralProfile      ReferralProfile?
+  referralsSent        Referral[]            @relation("ReferralInviter")
+  referralReceived     Referral?             @relation("ReferralInvitee")
+  growthEvents         GrowthEvent[]
+  sentMessages         DirectMessage[]       @relation("MessageSender")
+  receivedMessages     DirectMessage[]       @relation("MessageRecipient")
+  conversationsA       DirectConversation[]  @relation("ConversationA")
+  conversationsB       DirectConversation[]  @relation("ConversationB")
+  reposts              PostRepost[]
+  confessions          Confession[]
+  confessionReactions  ConfessionReaction[]
+  postReactions        PostReaction[]
+  blocksCreated        Block[]               @relation("Blocker")
+  blockedBy            Block[]               @relation("Blocked")
+  mutesCreated         UserMute[]            @relation("Muter")
+  mutedBy              UserMute[]            @relation("Muted")
+  dmReportsFiled       DirectMessageReport[] @relation("DmReporter")
+  dmReportsReceived    DirectMessageReport[] @relation("DmReported")
+  askQuestions         AskQuestion[]         @relation("AskAuthor")
+  askReactions         AskReaction[]         @relation("AskReactor")
+  confessionComments   ConfessionComment[]   @relation("ConfessionCommenter")
+  confessionReports    ConfessionReport[]    @relation("ConfessionReporter")
+  eventReminders       EventReminder[]
+}
+
+model Post {
+  id                String            @id @default(cuid())
+  slug              String            @unique
+  title             String
+  body              String
+  excerpt           String
+  category          String
+  tagsJson          String
+  mediaType         String?
+  mediaFileId       String?
+  mediaAspect       String?
+  altText           String?
+  location          String?
+  // Optional official-platform link (YouTube/TikTok/Instagram/X/Facebook/LinkedIn) shown as
+  // the hero "▶️ Watch on …" button on the channel post and inside the Mini App detail view.
+  linkUrl           String?
+  linkPlatform      String?
+  authorName        String
+  readingMinutes    Int               @default(1)
+  publishedAt       DateTime?
+  telegramMessageId Int?
+  telegramChatId    String?
+  locked            Boolean           @default(false)
+  visibility        String            @default("PUBLIC")
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  authorId          String
+  author            User              @relation(fields: [authorId], references: [id])
+  communityId       String?
+  community         Community?        @relation(fields: [communityId], references: [id], onDelete: SetNull)
+  monetizationType  String            @default("FREE")
+  priceCoins        Int               @default(0)
+  purchases         ContentPurchase[]
+  reports           PostReport[]
+  reactions         PostReaction[]
+  comments          PostComment[]
+  notifications     Notification[]
+  reposts           PostRepost[]
+  bookmarks         Bookmark[]
+  feedEvents        FeedEvent[]
+
+  @@index([communityId, publishedAt])
+}
+
+model Submission {
+  id             String               @id @default(cuid())
+  telegramChatId String
+  telegramUserId String
+  state          SubmissionState      @default(INPUT)
+  title          String?
+  body           String?
+  mediaType      String?
+  mediaFileId    String?
+  category       String?
+  tagsJson       String?
+  location       String?
+  // Wizard step 4/5: optional official-platform link captured during post creation.
+  linkUrl        String?
+  linkPlatform   String?
+  normalizedJson String?
+  previewJson    String?
+  moderationJson String?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  userId         String
+  user           User                 @relation(fields: [userId], references: [id])
+  session        ConversationSession?
+}
+
+model PostReaction {
+  id        String   @id @default(cuid())
+  postId    String
+  userId    String
+  type      String   @default("LIKE")
+  createdAt DateTime @default(now())
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId])
+  @@index([postId, type])
+}
+
+model PostComment {
+  id        String   @id @default(cuid())
+  postId    String
+  userId    String
+  body      String
+  status    String   @default("VISIBLE")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([postId, createdAt])
+  @@index([status, createdAt])
+}
+
+model PostReport {
+  id         String    @id @default(cuid())
+  postId     String
+  reporterId String
+  reason     String
+  details    String?
+  status     String    @default("OPEN")
+  resolvedBy String?
+  resolvedAt DateTime?
+  createdAt  DateTime  @default(now())
+  post       Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  reporter   User      @relation(fields: [reporterId], references: [id])
+
+  @@index([postId, status])
+  @@index([status, createdAt])
+}
+
+model ModerationEvent {
+  id           String           @id @default(cuid())
+  submissionId String?
+  targetUserId String
+  moderatorId  String?
+  category     String
+  action       ModerationAction
+  reason       String
+  evidence     String?
+  createdAt    DateTime         @default(now())
+  targetUser   User             @relation("TargetUser", fields: [targetUserId], references: [id])
+  moderator    User?            @relation("Moderator", fields: [moderatorId], references: [id])
+}
+
+model ConversationSession {
+  id             String      @id @default(cuid())
+  telegramUserId String      @unique
+  submissionId   String?     @unique
+  confessionId   String?     @unique
+  step           String
+  locale         Locale      @default(AMHARIC)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  submission     Submission? @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  confession     Confession? @relation(fields: [confessionId], references: [id], onDelete: Cascade)
+  user           User?       @relation(fields: [userId], references: [id])
+  userId         String?
+}
+
+model Confession {
+  id                String               @id @default(cuid())
+  telegramUserId    String
+  userId            String
+  body              String?
+  state             String               @default("INPUT")
+  moderationJson    String?
+  number            Int?
+  telegramMessageId Int?
+  telegramChatId    String?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  user              User                 @relation(fields: [userId], references: [id])
+  session           ConversationSession?
+  reactions         ConfessionReaction[]
+  comments          ConfessionComment[]
+  reports           ConfessionReport[]
+
+  @@index([state, createdAt])
+}
+
+model ConfessionReaction {
+  id           String     @id @default(cuid())
+  confessionId String
+  userId       String
+  choice       String
+  createdAt    DateTime   @default(now())
+  confession   Confession @relation(fields: [confessionId], references: [id], onDelete: Cascade)
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([confessionId, userId])
+  @@index([confessionId, choice])
+}
+
+model Bookmark {
+  id        String   @id @default(cuid())
+  userId    String
+  postId    String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, postId])
+  @@index([userId, createdAt])
+}
+
+model FeedEvent {
+  id        String   @id @default(cuid())
+  userId    String
+  postId    String
+  event     String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([postId, event])
+}
+
+model Community {
+  id          String            @id @default(cuid())
+  slug        String            @unique
+  name        String
+  description String
+  category    String
+  city        String?
+  coverEmoji  String            @default("🏘️")
+  isPublic    Boolean           @default(true)
+  ownerId     String
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  owner       User              @relation("CommunityOwner", fields: [ownerId], references: [id])
+  members     CommunityMember[]
+  posts       Post[]
+
+  @@index([category, createdAt])
+  @@index([city, createdAt])
+}
+
+model CommunityMember {
+  id          String    @id @default(cuid())
+  communityId String
+  userId      String
+  role        String    @default("MEMBER")
+  joinedAt    DateTime  @default(now())
+  community   Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([communityId, userId])
+  @@index([communityId, role])
+  @@index([userId, joinedAt])
+}
+
+model Opportunity {
+  id             String            @id @default(cuid())
+  title          String
+  description    String
+  type           String
+  category       String
+  organization   String
+  location       String?
+  deadline       DateTime?
+  contactText    String?
+  applicationUrl String?
+  verified       Boolean           @default(false)
+  active         Boolean           @default(true)
+  ownerId        String
+  owner          User              @relation("OpportunityOwner", fields: [ownerId], references: [id])
+  saves          OpportunitySave[]
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@index([category, active, deadline])
+  @@index([type, active, createdAt])
+  @@index([ownerId, createdAt])
+}
+
+model OpportunitySave {
+  id            String      @id @default(cuid())
+  opportunityId String
+  userId        String
+  createdAt     DateTime    @default(now())
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([opportunityId, userId])
+  @@index([userId, createdAt])
+}
+
+model Follow {
+  id          String   @id @default(cuid())
+  followerId  String
+  followingId String
+  createdAt   DateTime @default(now())
+  follower    User     @relation("FollowerUser", fields: [followerId], references: [id], onDelete: Cascade)
+  following   User     @relation("FollowedUser", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, followingId])
+  @@index([followingId, createdAt])
+  @@index([followerId, createdAt])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  type      String
+  title     String
+  body      String
+  postId    String?
+  actorId   String?
+  actor     User?     @relation("NotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post      Post?     @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+}
+
+model Event {
+  id          String          @id @default(cuid())
+  title       String
+  description String
+  category    String
+  location    String?
+  startsAt    DateTime
+  endsAt      DateTime?
+  coverEmoji  String          @default("🎉")
+  isOnline    Boolean         @default(false)
+  meetingText String?
+  active      Boolean         @default(true)
+  ownerId     String
+  owner       User            @relation("EventOwner", fields: [ownerId], references: [id])
+  rsvps       EventRSVP[]
+  reminders   EventReminder[]
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([startsAt, active])
+  @@index([category, startsAt])
+  @@index([ownerId, createdAt])
+}
+
+model EventRSVP {
+  id        String   @id @default(cuid())
+  eventId   String
+  userId    String
+  status    String   @default("GOING")
+  createdAt DateTime @default(now())
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@index([eventId, status])
+  @@index([userId, createdAt])
+}
+
+model Poll {
+  id          String       @id @default(cuid())
+  question    String
+  description String?
+  category    String       @default("አስተያየት")
+  active      Boolean      @default(true)
+  multiple    Boolean      @default(false)
+  closesAt    DateTime?
+  ownerId     String
+  owner       User         @relation("PollOwner", fields: [ownerId], references: [id])
+  options     PollOption[]
+  votes       PollVote[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([active, createdAt])
+  @@index([closesAt])
+}
+
+model PollOption {
+  id       String     @id @default(cuid())
+  pollId   String
+  text     String
+  position Int
+  poll     Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  votes    PollVote[]
+
+  @@unique([pollId, position])
+  @@index([pollId, position])
+}
+
+model PollVote {
+  id        String     @id @default(cuid())
+  pollId    String
+  optionId  String
+  userId    String
+  createdAt DateTime   @default(now())
+  poll      Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  option    PollOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([pollId, userId, optionId])
+  @@index([pollId, userId])
+  @@index([optionId])
+}
+
+model Quiz {
+  id          String         @id @default(cuid())
+  title       String
+  description String?
+  category    String         @default("ክዊዝ")
+  active      Boolean        @default(true)
+  ownerId     String
+  owner       User           @relation("QuizOwner", fields: [ownerId], references: [id])
+  questions   QuizQuestion[]
+  answers     QuizAnswer[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([active, createdAt])
+}
+
+model QuizQuestion {
+  id       String       @id @default(cuid())
+  quizId   String
+  question String
+  position Int
+  quiz     Quiz         @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  options  QuizOption[]
+  answers  QuizAnswer[]
+
+  @@unique([quizId, position])
+}
+
+model QuizOption {
+  id         String       @id @default(cuid())
+  questionId String
+  text       String
+  position   Int
+  isCorrect  Boolean      @default(false)
+  question   QuizQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  answers    QuizAnswer[]
+
+  @@unique([questionId, position])
+}
+
+model QuizAnswer {
+  id         String       @id @default(cuid())
+  quizId     String
+  questionId String
+  optionId   String
+  userId     String
+  createdAt  DateTime     @default(now())
+  quiz       Quiz         @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  question   QuizQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  option     QuizOption   @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([quizId, questionId, userId])
+  @@index([quizId, userId])
+}
+
+model ReferralProfile {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  code      String   @unique
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Referral {
+  id            String   @id @default(cuid())
+  inviterId     String
+  inviteeId     String   @unique
+  code          String
+  status        String   @default("COMPLETED")
+  inviterReward Int      @default(50)
+  inviteeReward Int      @default(20)
+  createdAt     DateTime @default(now())
+  inviter       User     @relation("ReferralInviter", fields: [inviterId], references: [id], onDelete: Cascade)
+  invitee       User     @relation("ReferralInvitee", fields: [inviteeId], references: [id], onDelete: Cascade)
+
+  @@index([inviterId, createdAt])
+  @@index([code, createdAt])
+}
+
+model GrowthEvent {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String
+  targetId  String?
+  metadata  String?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type, createdAt])
+  @@index([type, createdAt])
+}
+
+model DirectConversation {
+  id            String          @id @default(cuid())
+  userAId       String
+  userBId       String
+  lastMessageAt DateTime        @default(now())
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  userA         User            @relation("ConversationA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB         User            @relation("ConversationB", fields: [userBId], references: [id], onDelete: Cascade)
+  messages      DirectMessage[]
+
+  @@unique([userAId, userBId])
+  @@index([userAId, lastMessageAt])
+  @@index([userBId, lastMessageAt])
+}
+
+model DirectMessage {
+  id             String                @id @default(cuid())
+  conversationId String
+  senderId       String
+  recipientId    String
+  body           String
+  readAt         DateTime?
+  createdAt      DateTime              @default(now())
+  conversation   DirectConversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender         User                  @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  recipient      User                  @relation("MessageRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  reports        DirectMessageReport[]
+
+  @@index([conversationId, createdAt])
+  @@index([recipientId, readAt])
+}
+
+model PostRepost {
+  id        String   @id @default(cuid())
+  postId    String
+  userId    String
+  createdAt DateTime @default(now())
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId])
+  @@index([userId, createdAt])
+}
+
+// Feature-flag / configuration store. Read via getSetting()/setSetting() helpers and
+// surfaced to the Mini App through GET /api/settings (public flags only).
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model Block {
+  id        String   @id @default(cuid())
+  blockerId String
+  blockedId String
+  createdAt DateTime @default(now())
+  blocker   User     @relation("Blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked   User     @relation("Blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerId, blockedId])
+  @@index([blockedId])
+}
+
+model UserMute {
+  id        String    @id @default(cuid())
+  muterId   String
+  mutedId   String
+  untilAt   DateTime?
+  createdAt DateTime  @default(now())
+  muter     User      @relation("Muter", fields: [muterId], references: [id], onDelete: Cascade)
+  muted     User      @relation("Muted", fields: [mutedId], references: [id], onDelete: Cascade)
+
+  @@unique([muterId, mutedId])
+  @@index([mutedId])
+}
+
+model DirectMessageReport {
+  id         String         @id @default(cuid())
+  messageId  String?
+  reporterId String
+  reportedId String
+  reason     String
+  details    String?
+  status     String         @default("OPEN")
+  resolvedBy String?
+  resolvedAt DateTime?
+  createdAt  DateTime       @default(now())
+  message    DirectMessage? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  reporter   User           @relation("DmReporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  reported   User           @relation("DmReported", fields: [reportedId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+}
+
+model AskQuestion {
+  id             String        @id @default(cuid())
+  body           String
+  authorId       String
+  answerBody     String?
+  answeredBy     String?
+  answeredAt     DateTime?
+  status         String        @default("PENDING") // PENDING | ANSWERED | REJECTED
+  moderationJson String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  author         User          @relation("AskAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  reactions      AskReaction[]
+
+  @@index([status, createdAt])
+}
+
+model AskReaction {
+  id         String      @id @default(cuid())
+  questionId String
+  userId     String
+  choice     String
+  createdAt  DateTime    @default(now())
+  question   AskQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  user       User        @relation("AskReactor", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([questionId, userId])
+  @@index([questionId, choice])
+}
+
+model ConfessionComment {
+  id           String     @id @default(cuid())
+  confessionId String
+  userId       String
+  body         String
+  status       String     @default("VISIBLE")
+  createdAt    DateTime   @default(now())
+  confession   Confession @relation(fields: [confessionId], references: [id], onDelete: Cascade)
+  user         User       @relation("ConfessionCommenter", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([confessionId, createdAt])
+}
+
+model ConfessionReport {
+  id           String     @id @default(cuid())
+  confessionId String
+  reporterId   String
+  reason       String
+  details      String?
+  status       String     @default("OPEN")
+  resolvedBy   String?
+  resolvedAt   DateTime?
+  createdAt    DateTime   @default(now())
+  confession   Confession @relation(fields: [confessionId], references: [id], onDelete: Cascade)
+  reporter     User       @relation("ConfessionReporter", fields: [reporterId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+}
+
+model EventReminder {
+  id        String    @id @default(cuid())
+  eventId   String
+  userId    String
+  minutes   Int       @default(60)
+  createdAt DateTime  @default(now())
+  sentAt    DateTime?
+  event     Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@index([sentAt])
+}
+
+model XpEvent {
+  id        String   @id @default(cuid())
+  userId    String
+  action    String
+  points    Int
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+}
+
+model Badge {
+  id          String      @id @default(cuid())
+  key         String      @unique
+  name        String
+  description String
+  emoji       String
+  threshold   Int         @default(0)
+  userBadges  UserBadge[]
+}
+
+model UserBadge {
+  id        String   @id @default(cuid())
+  userId    String
+  badgeId   String
+  awardedAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  badge     Badge    @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, badgeId])
+  @@index([userId, awardedAt])
+}
+
+model Wallet {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  balance   Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model WalletTransaction {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String
+  amount    Int
+  reference String?
+  note      String?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model Tip {
+  id          String   @id @default(cuid())
+  senderId    String
+  recipientId String
+  amountCoins Int
+  message     String?
+  createdAt   DateTime @default(now())
+  sender      User     @relation("TipSender", fields: [senderId], references: [id], onDelete: Cascade)
+  recipient   User     @relation("TipRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@index([recipientId, createdAt])
+  @@index([senderId, createdAt])
+}
+
+model CreatorSubscription {
+  id                String    @id @default(cuid())
+  subscriberId      String
+  creatorId         String
+  priceCoins        Int
+  status            String    @default("ACTIVE")
+  startedAt         DateTime  @default(now())
+  expiresAt         DateTime?
+  cancelAtPeriodEnd Boolean   @default(false)
+  autoRenew         Boolean   @default(true)
+  periodDays        Int       @default(30)
+  createdAt         DateTime  @default(now())
+  subscriber        User      @relation("Subscriber", fields: [subscriberId], references: [id], onDelete: Cascade)
+  creator           User      @relation("Creator", fields: [creatorId], references: [id], onDelete: Cascade)
+
+  @@unique([subscriberId, creatorId])
+  @@index([creatorId, status])
+}
+
+model ContentPurchase {
+  id         String   @id @default(cuid())
+  postId     String
+  buyerId    String
+  priceCoins Int
+  createdAt  DateTime @default(now())
+  post       Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  buyer      User     @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, buyerId])
+  @@index([buyerId, createdAt])
+}

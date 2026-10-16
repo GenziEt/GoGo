@@ -1,0 +1,25 @@
+{
+  "name": "genzi-ethiopia",
+  "private": true,
+  "version": "0.3.5",
+  "description": "GENZI Ethiopia Telegram-native community ecosystem",
+  "workspaces": [
+    "apps/bot",
+    "apps/web",
+    "apps/admin"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w apps/bot",
+    "build": "npm run build -ws",
+    "db:generate": "npm run prisma:generate -w apps/bot",
+    "db:push": "npm run prisma:push -w apps/bot",
+    "db:generate:postgres": "npm run prisma:generate:postgres -w apps/bot",
+    "db:push:postgres": "npm run prisma:push:postgres -w apps/bot",
+    "db:studio": "npm run prisma:studio -w apps/bot",
+    "config:validate": "node scripts/validate-production.mjs",
+    "db:backup": "node scripts/backup-sqlite.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
