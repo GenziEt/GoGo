@@ -18,7 +18,7 @@ import { InlineKeyboard } from "grammy";
 import { env } from "./config.js";
 import { logger } from "./logger.js";
 import type { Locale } from "./i18n.js";
-import { BRAND, brandChipLine, CAPTION_DIVIDER_WIDTH, factBlockEntries, themeFor, isStructuralLayout } from "./post-theme.js";
+import { BRAND, brandChipLine, seriesChipLine, CAPTION_DIVIDER_WIDTH, factBlockEntries, themeFor, isStructuralLayout } from "./post-theme.js";
 
 // --- Button colours ---------------------------------------------------------------
 // Bot API 9.4 `style` field: "success" = green, "primary" = blue, "danger" = red. Clients
@@ -129,11 +129,14 @@ export const CAPTION_DIVIDER = "━".repeat(CAPTION_DIVIDER_WIDTH);
 // the category COLOR is applied by the Phase 2 card renderer, which reads tokens
 // directly from post-theme.ts. The channel-handle variant is kept for posts whose
 // category is unknown (legacy rows), preserving the old look exactly.
-function brandHeader(category?: string, locale: Locale = "en"): string {
+function brandHeader(category?: string, locale: Locale = "en", seriesKey?: string | null): string {
   if (!category) {
     return `🇪🇹 <b>GENZI</b> · <i>${env.GENZI_CHANNEL_USERNAME ? `@${env.GENZI_CHANNEL_USERNAME}` : "Ethiopia's Gen Z pulse"}</i>`;
   }
-  const chip = brandChipLine(category, locale);
+  // Series episodes swap the category chip for the fixed series chip (Phase 3 visual
+  // spec). Unknown/null keys fall back to the ordinary category chip inside
+  // seriesChipLine — a stale value can never render an empty anchor.
+  const chip = seriesKey ? seriesChipLine(seriesKey, category, locale) : brandChipLine(category, locale);
   const [mark, rest] = chip.split(" · ");
   return `<b>${mark}</b> · <b>${rest ?? ""}</b>`;
 }
@@ -218,7 +221,7 @@ export function buildCaptionParts(input: CaptionInput): { head: string; body: st
   const date = formatPostDate(input.publishedAt, "en");
   const footer = `\n\n${CAPTION_DIVIDER}\n👤 ${esc(input.author)} · 📅 ${date} · 📚 ${input.readingMinutes} min read`;
   return {
-    head: `${brandHeader(input.category, input.locale ?? "en")}\n\n<b>${esc(input.title)}</b>${quote}${buildFactBlockLines(input)}`,
+    head: `${brandHeader(input.category, input.locale ?? "en", input.seriesKey)}\n\n<b>${esc(input.title)}</b>${quote}${buildFactBlockLines(input)}`,
     body: highlightKeyFacts(esc(input.body)),
     tail: `${tagLine}${locationLine}${footer}`,
   };
@@ -237,9 +240,12 @@ export function buildChannelCaptionPlain(input: Omit<CaptionInput, "escapeHtml">
   const locationLine = input.location ? `\n📍 ${input.location}` : "";
   const date = formatPostDate(input.publishedAt, "en");
   const footer = `\n\n${CAPTION_DIVIDER}\n👤 ${input.author} · 📅 ${date} · 📚 ${input.readingMinutes} min read`;
-  // Same category chip as the HTML caption — brandChipLine returns plain text already.
-  // Bare fallback comes from BRAND.mark in post-theme.ts (single source of truth).
-  const head = input.category ? brandChipLine(input.category, input.locale ?? "en") : BRAND.mark;
+  // Same chip as the HTML caption — series episodes show their fixed series chip,
+  // everything else shows the category chip (both plain text already). Bare fallback
+  // comes from BRAND.mark in post-theme.ts (single source of truth).
+  const head = input.category
+    ? (input.seriesKey ? seriesChipLine(input.seriesKey, input.category, input.locale ?? "en") : brandChipLine(input.category, input.locale ?? "en"))
+    : BRAND.mark;
   // Fact rows in the plain twin too, so the fallback path never loses the block either.
   let factLines = "";
   if (input.category && input.factValues && isStructuralLayout(themeFor(input.category).layout)) {
