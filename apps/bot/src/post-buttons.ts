@@ -195,6 +195,11 @@ export interface CaptionInput {
   // chip, so recurring formats are recognizable at a glance without reading the caption.
   // Unknown/null keys fall back to the ordinary category chip — never an empty anchor.
   seriesKey?: string | null;
+  // Phase 3 expandable quotes: when the body is long, the feed stays short — the
+  // visible part ends here and everything after goes to the threaded "continued
+  // below ↓" replies. Readers choose to expand; the channel feed never towers.
+  // Only meaningful on the split path; ignored when the whole post fits one message.
+  expandAfterChars?: number;
   escapeHtml: (value: string) => string;
 }
 
@@ -212,7 +217,11 @@ export function buildFactBlockLines(input: CaptionInput): string {
 
 // The caption in three blocks so the publisher can split long posts without cutting HTML:
 //   head = brand chip + bold title (+ TL;DR quote), tail = tags/location + dated footer.
-export function buildCaptionParts(input: CaptionInput): { head: string; body: string; tail: string } {
+// Expandable quotes (Phase 3): when `expandAfterChars` is set, `body` holds only the
+// visible lead and `hiddenBody` the remainder — the publisher threads the hidden part as
+// "continued below ↓" replies so a long post stays short in the feed and readers choose
+// to expand. Unset → body stays whole (short posts and legacy callers unchanged).
+export function buildCaptionParts(input: CaptionInput): { head: string; body: string; tail: string; hiddenBody: string } {
   const esc = input.escapeHtml;
   const tldr = buildTldr(input.body);
   const quote = tldr ? `\n\n<blockquote>${esc(tldr)}</blockquote>` : "";
@@ -220,10 +229,25 @@ export function buildCaptionParts(input: CaptionInput): { head: string; body: st
   const locationLine = input.location ? `\n📍 ${esc(input.location)}` : "";
   const date = formatPostDate(input.publishedAt, "en");
   const footer = `\n\n${CAPTION_DIVIDER}\n👤 ${esc(input.author)} · 📅 ${date} · 📚 ${input.readingMinutes} min read`;
+  // Split the RAW body at a paragraph boundary near the requested length — never
+  // mid-HTML, because each piece is escaped separately downstream.
+  let visible = input.body;
+  let hiddenBody = "";
+  if (input.expandAfterChars && input.body.length > input.expandAfterChars * 1.25) {
+    const target = Math.min(Math.max(200, input.expandAfterChars), input.body.length - 1);
+    let cut = input.body.lastIndexOf("\n\n", target);
+    if (cut < target * 0.4) cut = input.body.lastIndexOf("\n", target);
+    if (cut < target * 0.4) cut = input.body.lastIndexOf(" ", target);
+    if (cut > 0) {
+      visible = input.body.slice(0, cut).trimEnd();
+      hiddenBody = input.body.slice(cut).trim();
+    }
+  }
   return {
     head: `${brandHeader(input.category, input.locale ?? "en", input.seriesKey)}\n\n<b>${esc(input.title)}</b>${quote}${buildFactBlockLines(input)}`,
-    body: highlightKeyFacts(esc(input.body)),
+    body: highlightKeyFacts(esc(visible)),
     tail: `${tagLine}${locationLine}${footer}`,
+    hiddenBody,
   };
 }
 

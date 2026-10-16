@@ -38,11 +38,20 @@ type PublishInput = {
   cardSlug?: string;
   preferCard?: boolean;
   locale?: "en" | "am";
-  // Phase 3 (plan §3 caption position): put the caption ABOVE the media. Used for
+  // Phase 3 (caption position): put the caption ABOVE the media. Used for
   // opportunities/events where the text IS the product. Requires Bot API 9.3's
   // `caption_position` — clients that predate it ignore the field silently and show
   // the default below-caption look, so this is purely additive and safe to ship.
   captionAbove?: boolean;
+  // Phase 3 (series visual spec): key into post-theme.ts SERIES. Threads through
+  // to the card renderer so a series episode's branded card carries its fixed
+  // chip, exactly like the caption does. Null/unknown = ordinary category chip.
+  seriesKey?: string | null;
+  // Phase 3 (expandable quotes): characters of body kept visible in the feed for
+  // long posts; the remainder threads as "continued below ↓" replies. Short posts
+  // and callers that omit it are unaffected — the split only kicks in when the
+  // body clearly exceeds this length.
+  expandAfterChars?: number;
 };
 
 // Telegram hard limits: 4096 chars per text message, 1024 per media caption. The post wizard
@@ -80,6 +89,8 @@ function premiumCaption(input: PublishInput): string {
     // Thread the collected fact values into the shared caption builder so the
     // published post renders the same anchored rows the author saw in preview.
     ...(input.factValues ? { factValues: input.factValues } : {}),
+    ...(input.seriesKey !== undefined && input.seriesKey !== null ? { seriesKey: input.seriesKey } : {}),
+    ...(input.expandAfterChars ? { expandAfterChars: input.expandAfterChars } : {}),
     escapeHtml,
   });
 }
@@ -159,6 +170,7 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
       category: input.category ?? "",
       locale: input.locale ?? "en",
       factValues: publishInput.factValues,
+      ...(input.seriesKey ? { seriesKey: input.seriesKey } : {}),
       ...(input.body.trim() ? { subtitle: input.body.trim().split("\n\n")[0] } : {}),
     });
     if (card) {
@@ -225,6 +237,7 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
     ...(publishInput.location ? { location: publishInput.location } : {}),
     ...(publishInput.category ? { category: publishInput.category } : {}),
     ...(publishInput.factValues ? { factValues: publishInput.factValues } : {}),
+    ...(input.seriesKey !== undefined && input.seriesKey !== null ? { seriesKey: input.seriesKey } : {}),
     escapeHtml,
   });
   const budget = hasMedia ? CAPTION_LIMIT : TEXT_CHUNK;
