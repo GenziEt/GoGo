@@ -39,6 +39,15 @@ const ACCENT_TEXT_ON_LIGHT = "#0B1020";
 /** Text color for use on dark accents (Rose/Magenta sit mid-luminance). */
 const ACCENT_TEXT_ON_DARK = "#FFFFFF";
 
+/** Maximum-emphasis text color: card titles and section headers ("TL;DR"). */
+const TEXT_TITLE = ACCENT_TEXT_ON_DARK;
+
+/** Translucent white surface fill for fact-block panels on the dark base. */
+const PANEL_BG = "rgba(255,255,255,0.04)";
+
+/** Panel hairline border — same white family as PANEL_BG, one step brighter. */
+const PANEL_BORDER = "rgba(255,255,255,0.08)";
+
 /** Default accent used when a category key is unknown (should never render; kept contrast-safe). */
 const FALLBACK_ACCENT = "#4FC3F7";
 
@@ -182,6 +191,12 @@ export interface ThemeCategory {
     accentText: string;
     body: string;
     muted: string;
+    /** Maximum-emphasis text (card titles, "TL;DR" header) on the dark base. */
+    title: string;
+    /** Translucent surface fill for fact-block panels. */
+    panelBg: string;
+    /** Hairline border for fact-block panels. */
+    panelBorder: string;
   };
   /**
    * Which single cyberpunk touch dominates this category's card.
@@ -215,6 +230,9 @@ function makeCategory(
       accentText: contrastCheckedAccentText(accent),
       body: TEXT_BODY,
       muted: TEXT_MUTED,
+      title: TEXT_TITLE,
+      panelBg: PANEL_BG,
+      panelBorder: PANEL_BORDER,
     },
     dominantAccent,
   };
@@ -321,6 +339,14 @@ export const SHAPES = {
   radiusChip: 999,
   /** Corner radius: fact-block panels. */
   radiusPanel: 24,
+  /**
+   * Tracking (letter-spacing) steps used by uppercase display text.
+   * chip = wide tracking on the category pill; label = gentle tracking on
+   * small uppercase field labels. Derived from dividerWidth so a single
+   * hairline retune keeps tracking proportional.
+   */
+  letterSpacingChip: 2,
+  letterSpacingLabel: 1,
   /** Border thickness for the neon accent treatment. */
   neonBorderWidth: 6,
   /** Glow blur radius (used when glow is the dominant accent). */
