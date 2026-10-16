@@ -14,9 +14,11 @@
   },
   "dependencies": {
     "@prisma/client": "^6.15.0",
+    "@resvg/resvg-js": "^2.6.2",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
     "grammy": "^1.38.1",
+    "satori": "^0.62.0",
     "zod": "^4.1.5"
   },
   "devDependencies": {
