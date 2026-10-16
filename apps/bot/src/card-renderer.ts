@@ -34,6 +34,7 @@ import {
   SPACING,
   TYPOGRAPHY,
   factBlockEntries,
+  seriesChipLine,
   themeFor,
 } from "./post-theme.js";
 
@@ -51,6 +52,14 @@ export interface CardInput {
   factValues?: Record<string, string | undefined> | undefined;
   /** Optional body line shown under the title for short-story layouts. */
   subtitle?: string;
+  /**
+   * Phase 3 series visual spec: key into post-theme.ts SERIES. A series episode
+   * shows its FIXED chip on the card too ("🇪🇹 GENZI · 💸 MONDAY MONEY MOVES"), so
+   * recurring formats are recognizable at a glance without reading the caption.
+   * Unknown/null keys fall back to the ordinary category chip inside
+   * seriesChipLine — a stale value can never render an empty anchor.
+   */
+  seriesKey?: string | null;
 }
 
 /** A render result ready to attach to a Telegram message. */
@@ -207,8 +216,32 @@ function div(style: Record<string, unknown>, ...children: Array<Block | string>)
  * reading them from any theme keeps post-theme.ts the single source of truth. */
 const BASE = themeFor("community");
 
-function chipBlock(category: string, locale: "en" | "am"): Block {
+function chipBlock(category: string, locale: "en" | "am", seriesKey?: string | null): Block {
   const theme = themeFor(category);
+  // Series episodes show their FIXED series chip text on the card (Phase 3 visual
+  // spec). The chip keeps the home category's accent color — seriesFor borrows it —
+  // so color discipline holds. Unknown keys fall back inside seriesChipLine.
+  if (seriesKey) {
+    const line = seriesChipLine(seriesKey, category, locale); // e.g. "🇪🇹 GENZI · 💸 MONDAY MONEY MOVES"
+    const parts = line.split(" · ");
+    const label = parts.length > 1 ? parts.slice(1).join(" · ") : line;
+    const chip = TYPOGRAPHY.chip;
+    return div(
+      {
+        display: "flex",
+        alignItems: "center",
+        backgroundColor: theme.colors.accent,
+        color: theme.colors.accentText,
+        borderRadius: `${SHAPES.radiusChip}px`,
+        padding: `${LAYOUT_METRICS.chipPadY}px ${LAYOUT_METRICS.chipPadX}px`,
+        fontSize: `${chip.sizePx}px`,
+        fontWeight: chip.weight,
+        lineHeight: chip.lineHeight,
+        letterSpacing: `${SHAPES.letterSpacingChip}px`,
+      },
+      escapeHtml(label),
+    );
+  }
   const label = locale === "am" ? theme.chipLabelAm : theme.chipLabelEn.toUpperCase();
   const chip = TYPOGRAPHY.chip;
   return div(
@@ -419,7 +452,7 @@ export function buildCardElement(input: CardInput): Block {
   const contentChildren: Block[] = [
     div(
       { display: "flex", justifyContent: "space-between", alignItems: "center" },
-      chipBlock(input.category, input.locale),
+      chipBlock(input.category, input.locale, input.seriesKey),
       div(
         {
           width: `${m.logoSizePx}px`,
