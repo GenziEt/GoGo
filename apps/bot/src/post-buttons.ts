@@ -18,7 +18,7 @@ import { InlineKeyboard } from "grammy";
 import { env } from "./config.js";
 import { logger } from "./logger.js";
 import type { Locale } from "./i18n.js";
-import { BRAND, brandChipLine, CAPTION_DIVIDER_WIDTH } from "./post-theme.js";
+import { BRAND, brandChipLine, CAPTION_DIVIDER_WIDTH, factBlockEntries, themeFor, isStructuralLayout } from "./post-theme.js";
 
 // --- Button colours ---------------------------------------------------------------
 // Bot API 9.4 `style` field: "success" = green, "primary" = blue, "danger" = red. Clients
@@ -182,7 +182,24 @@ export interface CaptionInput {
   // instead of one identical brand line on every post. Omitted = legacy brand line.
   category?: string;
   locale?: Locale;
+  // Structured fact-block values collected by the wizard (money: where/deadline/who/how,
+  // events: date/time/venue, ai-tech: tldr/source). Rendered as anchored rows between the
+  // title and the body. Empty/missing anchors are dropped by factBlockEntries — a half-filled
+  // block can never render a broken row.
+  factValues?: Record<string, string | undefined>;
   escapeHtml: (value: string) => string;
+}
+
+// Fact-block rows for the caption ("📍 Where · value" one per line). Returns "" for
+// free-layout categories and for posts with no filled fields, so legacy callers are
+// unaffected. Same computation backs the private preview and the channel post (WYSIWYG).
+export function buildFactBlockLines(input: CaptionInput): string {
+  if (!input.category || !input.factValues) return "";
+  if (!isStructuralLayout(themeFor(input.category).layout)) return "";
+  const entries = factBlockEntries(input.category, input.factValues);
+  if (entries.length === 0) return "";
+  const esc = input.escapeHtml;
+  return "\n\n" + entries.map((e) => `${e.anchor} <b>${esc(e.label)}:</b> ${esc(e.value)}`).join("\n");
 }
 
 // The caption in three blocks so the publisher can split long posts without cutting HTML:
