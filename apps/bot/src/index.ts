@@ -16,7 +16,7 @@ import { performModerationAction, type AdminDecision } from "./admin-actions.js"
 import { publishToChannel, publishConfession, deleteChannelMessage } from "./telegram-publisher.js";
 import { parsePlatformLink, attachChannelButtons } from "./post-buttons.js";
 import { moderateText } from "./moderation.js";
-import { validateTheme } from "./post-theme.js";
+import { BRAND, validateTheme } from "./post-theme.js";
 import { rateLimit, moderateRequestText, collectTextValues, enforceContentModeration } from "./safety.js";
 import { randomBytes } from "node:crypto";
 import { logger } from "./logger.js";
@@ -344,7 +344,7 @@ bot.on("my_chat_member", async (ctx) => {
   if (ctx.myChatMember.new_chat_member.status === "left") return;
   try {
     const menuKb = env.WEBAPP_URL && env.WEBAPP_URL !== "*" ? new InlineKeyboard().url("🌐 Open GENZI", env.WEBAPP_URL) : null;
-    await ctx.reply("🇪🇹 GENZI is here! Members can DM me /start to join the community.", menuKb ? { reply_markup: menuKb } : undefined);
+    await ctx.reply(`${BRAND.mark} is here! Members can DM me /start to join the community.`, menuKb ? { reply_markup: menuKb } : undefined);
   } catch {
     /* missing post permission in that group — non-fatal */
   }
