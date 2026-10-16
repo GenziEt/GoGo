@@ -3,7 +3,7 @@ import { InputFile } from "grammy";
 import { env } from "./config.js";
 import { logger } from "./logger.js";
 import { buildChannelCaption, buildChannelCaptionPlain, buildCaptionParts } from "./post-buttons.js";
-import { factDefaults, missingFactFieldsAfterDefaults, themeFor, VOICE_RULES, type FactFieldSpec } from "./post-theme.js";
+import { CHANNEL_REACTIONS, factDefaults, missingFactFieldsAfterDefaults, themeFor, VOICE_RULES, type FactFieldSpec } from "./post-theme.js";
 import { renderCard } from "./card-renderer.js";
 
 // Every channel post is built with the shared premium caption (brand header, spaced body,
@@ -221,17 +221,32 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
   };
   const hasVideo = input.mediaType === "video" && !cardBuffer;
 
+  // Phase 4 (plan §Reactions): seed the branded reaction set on the published post.
+  // setMessageReaction is a bot privilege on its OWN channel messages — it displays the
+  // curated set (🔥 ❤️ 👏 😂 🤯 from CHANNEL_REACTIONS in the theme file) as suggested
+  // reactions to readers. Strictly best-effort: never blocks or fails a publish (§2.3
+  // publishing-never-blocked contract extended to engagement decoration).
+  const seedReactions = async (messageId: number): Promise<void> => {
+    try {
+      await bot.api.setMessageReaction(channel, messageId, [...CHANNEL_REACTIONS]);
+    } catch (error) {
+      logger.warn("branded reaction seeding failed (non-fatal)", { error: String(error) });
+    }
+  };
+
   // 1) Everything fits in one message / one caption — the common case.
   if (hasMedia && caption.length <= CAPTION_LIMIT) {
     const source = cardBuffer ?? (input.mediaFileId as string);
     try {
       const msg = await sendPhotoOrVideo(source, caption, true);
+      void seedReactions(msg.message_id);
       return { chatId: String(channel), messageId: msg.message_id };
     } catch (error) {
       // HTML parse failure on user content: retry once with the plain-text twin.
       logger.warn("channel caption HTML rejected, falling back to plain text", { error: String(error) });
       const plain = buildChannelCaptionPlain({ ...publishInput, readingMinutes: publishInput.readingMinutes ?? 1, publishedAt: new Date() }).slice(0, CAPTION_LIMIT);
       const msg = await sendPhotoOrVideo(source, plain, false);
+      void seedReactions(msg.message_id);
       return { chatId: String(channel), messageId: msg.message_id };
     }
   }
@@ -240,11 +255,13 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
     const previewOpts = linkPreviewOptions(publishInput, false);
     try {
       const msg = await bot.api.sendMessage(channel, caption, { parse_mode: "HTML", ...(previewOpts ? { link_preview_options: previewOpts as never } : {}) });
+      void seedReactions(msg.message_id);
       return { chatId: String(channel), messageId: msg.message_id };
     } catch (error) {
       logger.warn("channel message HTML rejected, falling back to plain text", { error: String(error) });
       const plain = buildChannelCaptionPlain({ ...publishInput, readingMinutes: publishInput.readingMinutes ?? 1, publishedAt: new Date() }).slice(0, 4000);
       const msg = await bot.api.sendMessage(channel, plain, previewOpts ? { link_preview_options: previewOpts as never } : undefined);
+      void seedReactions(msg.message_id);
       return { chatId: String(channel), messageId: msg.message_id };
     }
   }
@@ -295,6 +312,7 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
       reply_parameters: { message_id: firstId, allow_sending_without_reply: true },
     });
   }
+  void seedReactions(firstId);
   return { chatId: String(channel), messageId: firstId };
 }
 
