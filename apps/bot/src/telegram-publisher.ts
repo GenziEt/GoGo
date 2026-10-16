@@ -228,7 +228,10 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
   // publishing-never-blocked contract extended to engagement decoration).
   const seedReactions = async (messageId: number): Promise<void> => {
     try {
-      await bot.api.setMessageReaction(channel, messageId, [...CHANNEL_REACTIONS]);
+      // grammY types reaction arrays as ReactionType[]; emoji reactions are the literal
+      // discriminated-union member. Cast keeps us honest to the API shape without lying
+      // about CHANNEL_REACTIONS (plain strings in the theme file — the single source of truth).
+      await bot.api.setMessageReaction(channel, messageId, CHANNEL_REACTIONS.map((emoji) => ({ type: "emoji", emoji })) as never);
     } catch (error) {
       logger.warn("branded reaction seeding failed (non-fatal)", { error: String(error) });
     }

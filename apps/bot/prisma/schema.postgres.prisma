@@ -140,6 +140,11 @@ model Post {
   // Phase 3 series visual spec: key into the post-theme.ts SERIES registry.
   // Drives the series chip in captions/cards; null for one-off posts.
   seriesKey         String?
+  // Phase 4 (plan §Poll follow-ups): optional "Which one?" poll authored with a
+  // series episode. The scheduler sends it as a reply to the published post only
+  // when BOTH fields are present — never fabricated, never half-rendered.
+  pollQuestion      String?
+  pollOptionsJson   String?
   authorName        String
   readingMinutes    Int               @default(1)
   publishedAt       DateTime?

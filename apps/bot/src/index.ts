@@ -22,6 +22,7 @@ import { randomBytes } from "node:crypto";
 import { logger } from "./logger.js";
 import { createTelegramNotifier } from "./notifications.js";
 import { setEventReminder, cancelEventReminder, startReminderSweeper } from "./event-reminders.js";
+import { startSeriesScheduler } from "./series-scheduler.js";
 
 const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
 const notifier = createTelegramNotifier(bot);
@@ -702,6 +703,10 @@ setInterval(() => { void expireDueSubscriptions().catch((error) => logger.error(
 // Background sweeper for event reminders (RSVP-created EventReminder rows fire ~1 sweep tick
 // after their computed fire-time). Without this call, reminders were written but never sent.
 startReminderSweeper(notifier);
+
+// Phase 4 series scheduler: same sweeper pattern as event-reminders.ts — publishes due
+// scheduled series episodes on their fixed day and queues their poll follow-ups.
+startSeriesScheduler(bot);
 
 function hidePaidPostBody<T extends { monetizationType: string; priceCoins: number; authorId: string }>(post: T, viewerId: string | null, viewerRole: string | null): T {
   if (post.monetizationType !== "PAID") return post;
