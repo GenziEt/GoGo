@@ -455,8 +455,9 @@ export function factDefaults(
   const theme = themeFor(category);
   if (!isStructuralLayout(theme.layout)) return out;
   for (const field of theme.factFields) {
+    // The "link" key doubles as How / Tickets / Source depending on the layout —
+    // all three are satisfied by the author's own platform link when present.
     if (field.key === "link" && ctx.linkUrl) out.link = ctx.linkUrl;
-    if (field.key === "source" && ctx.linkUrl) out.source = ctx.linkUrl;
   }
   return out;
 }
