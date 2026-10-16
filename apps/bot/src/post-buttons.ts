@@ -213,7 +213,7 @@ export function buildCaptionParts(input: CaptionInput): { head: string; body: st
   const date = formatPostDate(input.publishedAt, "en");
   const footer = `\n\n${CAPTION_DIVIDER}\n👤 ${esc(input.author)} · 📅 ${date} · 📚 ${input.readingMinutes} min read`;
   return {
-    head: `${brandHeader(input.category, input.locale ?? "en")}\n\n<b>${esc(input.title)}</b>${quote}`,
+    head: `${brandHeader(input.category, input.locale ?? "en")}\n\n<b>${esc(input.title)}</b>${quote}${buildFactBlockLines(input)}`,
     body: highlightKeyFacts(esc(input.body)),
     tail: `${tagLine}${locationLine}${footer}`,
   };
@@ -235,7 +235,13 @@ export function buildChannelCaptionPlain(input: Omit<CaptionInput, "escapeHtml">
   // Same category chip as the HTML caption — brandChipLine returns plain text already.
   // Bare fallback comes from BRAND.mark in post-theme.ts (single source of truth).
   const head = input.category ? brandChipLine(input.category, input.locale ?? "en") : BRAND.mark;
-  return `${head}\n\n${input.title}\n\n${input.body}${tagLine}${locationLine}${footer}`;
+  // Fact rows in the plain twin too, so the fallback path never loses the block either.
+  let factLines = "";
+  if (input.category && input.factValues && isStructuralLayout(themeFor(input.category).layout)) {
+    const entries = factBlockEntries(input.category, input.factValues);
+    if (entries.length > 0) factLines = "\n\n" + entries.map((e) => `${e.anchor} ${e.label}: ${e.value}`).join("\n");
+  }
+  return `${head}\n\n${input.title}${factLines}\n\n${input.body}${tagLine}${locationLine}${footer}`;
 }
 
 // --- Keyboard ---------------------------------------------------------------------
