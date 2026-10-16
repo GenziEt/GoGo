@@ -9,6 +9,7 @@ import {
   BRAND,
   CATEGORY_THEMES,
   LAYOUT_METRICS,
+  SERIES,
   SPACING,
   TYPOGRAPHY,
   VOICE_RULES,
@@ -17,13 +18,16 @@ import {
   factBlockEntries,
   findMixedScriptSentences,
   hasEthiopic,
+  isSeriesDay,
   isStructuralLayout,
   missingRequiredFactFields,
+  seriesChipLine,
+  seriesFor,
   themeFor,
   validateTheme,
 } from "./post-theme.js";
 import { categories } from "./categories.js";
-import { buildChannelCaption, buildChannelCaptionPlain } from "./post-buttons.js";
+import { buildCaptionParts, buildChannelCaption, buildChannelCaptionPlain } from "./post-buttons.js";
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = ""): void {
@@ -234,5 +238,61 @@ check("HTML and plain twins agree on row content",
     moneyCaption.includes(label) === plainCaption.includes(label)));
 
 // ---------------------------------------------------------------------------
-console.log(failures === 0 ? "\n✅ All Phase 1 acceptance checks passed." : `\n❌ ${failures} check(s) failed.`);
+// 15. Phase 3 — series visual spec (chip, accent, fixed day)
+// ---------------------------------------------------------------------------
+check("every series has a unique key matching its registry slot",
+  Object.values(SERIES).every((s) => s.key in SERIES && s.chip === s.chip.toUpperCase()));
+check("every series names an existing category (accent comes from that theme)",
+  Object.values(SERIES).every((s) => s.category in CATEGORY_THEMES));
+check("series chip line replaces the plain category chip",
+  seriesChipLine("monday-money-moves", "money", "en") === `🇪🇹 GENZI · 💸 MONDAY MONEY MOVES`);
+check("unknown/missing series keys fall back to the ordinary category chip line",
+  seriesChipLine(null, "events", "en") === brandChipLine("events", "en") &&
+  seriesChipLine("deleted-series", "music", "en") === brandChipLine("music", "en"));
+check("series day contract: Monday Money Moves is fixed to Monday UTC",
+  isSeriesDay(seriesFor("monday-money-moves")!, new Date("2026-10-19T00:00:00Z")) && // a Monday
+  !isSeriesDay(seriesFor("monday-money-moves")!, new Date("2026-10-20T00:00:00Z")));
+check("seriesFor passes through unknown keys as null (rows optional, never empty anchors)",
+  seriesFor(undefined) === null && seriesFor("nope") === null);
+
+const seriesCaption = buildChannelCaption({
+  ...captionBase,
+  category: "money",
+  seriesKey: "monday-money-moves",
+  factValues: { location: "Remote", deadline: "31 Oct", eligibility: "Students", link: "https://x.com/a" },
+  escapeHtml: htmlEsc,
+});
+check("published caption carries the series chip instead of the category chip",
+  seriesCaption.includes("💸 MONDAY MONEY MOVES") && !seriesCaption.includes("· 💰 OPPORTUNITY"));
+check("series episode keeps its fact block intact (chip swap changes nothing else)",
+  ["📍 <b>Where:</b> Remote", "⏳ <b>Deadline:</b> 31 Oct"].every((row) => seriesCaption.includes(row)));
+
+// ---------------------------------------------------------------------------
+// 16. Phase 3 — expandable quotes (long bodies stay short in the feed)
+// ---------------------------------------------------------------------------
+const longPara = (n: number) => Array.from({ length: n }, (_, i) => `Paragraph ${i + 1}: some substantial body text to fill the feed.`).join("\n\n");
+// ~1400 chars — past the 700-char feed-visible budget AND its 1.25× trigger, so a
+// split is guaranteed; paragraph boundaries near the target make it land early.
+const wholeBody = longPara(20);
+
+const shortParts = buildCaptionParts({ ...captionBase, category: "music", expandAfterChars: VOICE_RULES.feedVisibleBodyChars, escapeHtml: htmlEsc });
+check("short bodies are never split (hidden part empty, no 'continued' path)",
+  shortParts.hiddenBody === "" && shortParts.body === htmlEsc(captionBase.body));
+
+const longParts = buildCaptionParts({ ...captionBase, body: wholeBody, category: "trending", expandAfterChars: VOICE_RULES.feedVisibleBodyChars, escapeHtml: htmlEsc });
+check("long bodies move the remainder out of the visible feed",
+  longParts.hiddenBody.length > 0 &&
+  longParts.body.length <= VOICE_RULES.feedVisibleBodyChars * 1.3);
+check("split happens at a paragraph boundary, not mid-sentence",
+  !longParts.body.endsWith(" ") && wholeBody.startsWith(longParts.body) &&
+  wholeBody.slice(longParts.body.length).trimStart().startsWith(longParts.hiddenBody));
+check("visible + hidden rejoin into the original body (nothing lost or duplicated)",
+  `${longParts.body}\n\n${longParts.hiddenBody}` === wholeBody);
+check("head/tail untouched by splitting (chip, title, footer always in message one)",
+  longParts.head.includes("<b>") && longParts.tail.includes("min read"));
+check("expandAfterChars unset → legacy behavior, body stays whole",
+  buildCaptionParts({ ...captionBase, body: wholeBody, escapeHtml: htmlEsc }).hiddenBody === "");
+
+// ---------------------------------------------------------------------------
+console.log(failures === 0 ? "\n✅ All Phase 1–3 acceptance checks passed." : `\n❌ ${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);
