@@ -11,8 +11,8 @@ import { t, type Locale } from "./i18n.js";
 import { getSession, setSession, clearSession, abandonOpenWork, isTextInputStep, isSkipAllowedStep, setPreferCard } from "./session-store.js";
 import { publishToChannel, deleteChannelMessage, requiredFactFieldsFor } from "./telegram-publisher.js";
 import { buildChannelCaption, buildChannelButtons, parsePlatformLink, attachChannelButtons, withButtonStyle } from "./post-buttons.js";
-import { isStructuralLayout, themeFor, factDefaults, missingFactFieldsAfterDefaults, type FactFieldSpec } from "./post-theme.js";
-import { renderCard } from "./card-renderer.js";
+import { isStructuralLayout, themeFor, factDefaults, missingFactFieldsAfterDefaults, brandChipLine, type FactFieldSpec } from "./post-theme.js";
+import { renderCard, clampTitle } from "./card-renderer.js";
 import { InputFile } from "grammy";
 import { logger } from "./logger.js";
 
@@ -180,7 +180,8 @@ async function finalizeToPreview(
     linkUrl: submission.linkUrl,
     linkPlatform: submission.linkPlatform,
     factValues: facts,
-  });
+    submissionId: submission.id,
+  }, (await getSession(ctx.from!.id))?.preferCard === true);
 }
 
 export async function getUser(ctx: Context) {
@@ -247,6 +248,27 @@ function buildPreview(post: Normalized, locale: Locale, ctxInfo: PreviewContext,
   return caption;
 }
 
+/**
+ * Render the GENZI branded card for a PREVIEW (never throws — renderCard's contract).
+ * The preview slug is namespaced by submission id so it can never collide with the
+ * published post's cache key (`<slug>-<timestamp>` at publish time).
+ */
+async function cardPreviewBuffer(
+  post: Normalized,
+  ctxInfo: PreviewContext,
+  locale: Locale,
+): Promise<Buffer | null> {
+  const card = await renderCard({
+    slug: `preview:${ctxInfo.submissionId ?? "anon"}:${post.slug}`,
+    title: clampTitle(post.title),
+    category: post.category,
+    locale,
+    factValues: ctxInfo.factValues,
+    ...(post.body.trim() ? { subtitle: post.body.trim().split("\n\n")[0] } : {}),
+  });
+  return card?.png ?? null;
+}
+
 async function sendPreview(
   ctx: Context,
   post: Normalized,
@@ -267,7 +289,7 @@ async function sendPreview(
     locale,
   });
   // Approve is green (success) and Cancel red (danger) — Bot API 9.4 button styles (private chat only).
-  const keyboard = channelButtons
+  const actionKeyboard = channelButtons
     ? withButtonStyle(
         withButtonStyle(channelButtons.text(t(locale, "approve"), "publish_preview"), "success").row()
           .text(t(locale, "edit"), "edit_preview")
@@ -281,16 +303,30 @@ async function sendPreview(
   // action rows; "use mine" is the default when untouched. Videos are never
   // offered for replacement — the video IS the content.
   const hasImage = post.mediaType === "image" && Boolean(post.mediaFileId) && Boolean(ctxInfo.submissionId);
-  const useCard = hasImage && parseCardChoice(await peekFactsJson(ctxInfo.submissionId as string));
+  const useCard = hasImage && preferCard;
+  const keyboard = new InlineKeyboard();
   if (hasImage) {
-    const choiceRow = new InlineKeyboard()
+    keyboard
       .text(useCard ? "🟢 🖼️ Use GENZI card" : "⚪ 🖼️ Use GENZI card", `cardchoice:${ctxInfo.submissionId}:genzi`)
       .text(!useCard ? "🟢 📷 Use mine" : "⚪ 📷 Use mine", `cardchoice:${ctxInfo.submissionId}:mine`);
-    keyboard.insertBeforeRow?.(choiceRow.build());
+  }
+  for (const row of actionKeyboard.inline_keyboard) {
+    if (hasImage) keyboard.row();
+    for (const btn of row) {
+      const b = btn as unknown as Record<string, unknown>;
+      if (typeof b.url === "string") keyboard.url(String(b.text), b.url);
+      else if (typeof b.data === "string") keyboard.text(String(b.text), b.data);
+    }
+  }
+  // Re-apply the approve-green / cancel-red styles after rebuilding rows.
+  if (channelButtons) {
+    withButtonStyle(keyboard, "success");
+    withButtonStyle(keyboard, "danger");
   }
   try {
     if (post.mediaType === "image" && post.mediaFileId) {
-      await ctx.replyWithPhoto(useCard ? (await cardPreviewBuffer(ctxInfo, post)) ?? post.mediaFileId : post.mediaFileId, { caption: buildPreview(post, locale, ctxInfo, 1000), parse_mode: "HTML", reply_markup: keyboard });
+      const source = useCard ? await cardPreviewBuffer(post, ctxInfo, locale) : null;
+      await ctx.replyWithPhoto(source ? new InputFile(source, "genzi-card-preview.png") : post.mediaFileId, { caption: buildPreview(post, locale, ctxInfo, 1000), parse_mode: "HTML", reply_markup: keyboard });
     } else if (post.mediaType === "video" && post.mediaFileId) {
       await ctx.replyWithVideo(post.mediaFileId, { caption: buildPreview(post, locale, ctxInfo, 1000), parse_mode: "HTML", reply_markup: keyboard });
     } else {
@@ -376,7 +412,41 @@ export function registerPostFlow(bot: Bot): void {
       linkUrl: draft.linkUrl,
       linkPlatform: draft.linkPlatform,
       factValues: effectiveFacts(normalized.category, draft),
-    });
+      submissionId: draft.id,
+    }, (await getSession(ctx.from.id))?.preferCard === true);
+  });
+
+  // Phase 2 (plan §2.3): author's media-vs-card choice. Stored on the session row,
+  // then the preview is re-sent so the 🟢 marker and the shown media both follow the tap.
+  bot.callbackQuery(/^cardchoice:([^:]+):(genzi|mine)$/, async (ctx) => {
+    if (!ctx.from || !isPrivate(ctx)) return ctx.answerCallbackQuery();
+    const user = await getUser(ctx);
+    const locale = toI18nLocale(user.locale);
+    const submissionId = ctx.match[1];
+    const choice = ctx.match[2];
+    const session = await getSession(ctx.from.id);
+    if (!session || session.submissionId !== submissionId || session.step !== "preview")
+      return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+    const submission = await db.submission.findUnique({ where: { id: submissionId } });
+    if (!submission || submission.state !== "PREVIEW" || !submission.normalizedJson)
+      return ctx.answerCallbackQuery(t(locale, "notReady"));
+    await setPreferCard(ctx.from.id, choice === "genzi");
+    await ctx.answerCallbackQuery();
+    const normalized = JSON.parse(submission.normalizedJson) as Normalized;
+    await sendPreview(
+      ctx,
+      normalized,
+      locale,
+      {
+        slug: normalized.slug,
+        author: user.firstName ?? "GENZI",
+        linkUrl: submission.linkUrl,
+        linkPlatform: submission.linkPlatform,
+        factValues: effectiveFacts(normalized.category, submission),
+        submissionId,
+      },
+      choice === "genzi",
+    );
   });
 
   bot.callbackQuery(/^cat:(.+)$/, async (ctx) => {
@@ -514,8 +584,8 @@ export function registerPostFlow(bot: Bot): void {
         // Branded card controls (plan §2.3): no media → card is generated and attached;
         // media present → author's stored choice decides ("use mine" wins unless preferCard).
         cardSlug,
-        preferCard: session?.preferCard === true,
-        locale: locale === "AMHARIC" ? "am" : "en",
+        preferCard: session?.preferCard === true && submission.mediaType === "image",
+        locale: toI18nLocale(user.locale),
       });
     } catch (error) {
       logger.error("GENZI channel publication failed", { error: String(error) });
@@ -833,7 +903,8 @@ export function registerPostFlow(bot: Bot): void {
           // through the facts step), but pass effective facts anyway so a structural post
           // that somehow reaches here still previews exactly what the gate will allow.
           factValues: effectiveFacts(matches[0]!.key, submission),
-        });
+          submissionId: submission.id,
+        }, (await getSession(ctx.from.id))?.preferCard === true);
         return;
       }
       // Zero or several matches: show the keyboard again so the user can tap the right button.
