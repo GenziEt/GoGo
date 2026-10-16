@@ -18,7 +18,7 @@ import { InlineKeyboard } from "grammy";
 import { env } from "./config.js";
 import { logger } from "./logger.js";
 import type { Locale } from "./i18n.js";
-import { brandChipLine, CAPTION_DIVIDER_WIDTH } from "./post-theme.js";
+import { BRAND, brandChipLine, CAPTION_DIVIDER_WIDTH } from "./post-theme.js";
 
 // --- Button colours ---------------------------------------------------------------
 // Bot API 9.4 `style` field: "success" = green, "primary" = blue, "danger" = red. Clients
@@ -216,7 +216,8 @@ export function buildChannelCaptionPlain(input: Omit<CaptionInput, "escapeHtml">
   const date = formatPostDate(input.publishedAt, "en");
   const footer = `\n\n${CAPTION_DIVIDER}\n👤 ${input.author} · 📅 ${date} · 📚 ${input.readingMinutes} min read`;
   // Same category chip as the HTML caption — brandChipLine returns plain text already.
-  const head = input.category ? brandChipLine(input.category, input.locale ?? "en") : "🇪🇹 GENZI";
+  // Bare fallback comes from BRAND.mark in post-theme.ts (single source of truth).
+  const head = input.category ? brandChipLine(input.category, input.locale ?? "en") : BRAND.mark;
   return `${head}\n\n${input.title}\n\n${input.body}${tagLine}${locationLine}${footer}`;
 }
 
@@ -297,9 +298,9 @@ function miniAppDeepLink(slug: string): string {
   return `https://t.me/${env.TELEGRAM_BOT_USERNAME}?startapp=post_${encodeURIComponent(slug)}`;
 }
 
-// Telegram's native share sheet, pre-filled with short brand copy.
+// Telegram's native share sheet, pre-filled with short brand copy (BRAND.mark from post-theme.ts).
 export function shareUrl(targetUrl: string): string {
-  return `https://t.me/share/url?url=${encodeURIComponent(targetUrl)}&text=${encodeURIComponent("🇪🇹 GENZI")}`;
+  return `https://t.me/share/url?url=${encodeURIComponent(targetUrl)}&text=${encodeURIComponent(BRAND.mark)}`;
 }
 
 // Attach (or replace) the button keyboard on a published channel message. Best-effort:

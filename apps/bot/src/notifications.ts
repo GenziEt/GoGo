@@ -9,6 +9,7 @@
 import type { Bot } from "grammy";
 import { db } from "./db.js";
 import { logger } from "./logger.js";
+import { BRAND } from "./post-theme.js";
 
 type NotifyInput = { title: string; body: string };
 
@@ -17,7 +18,7 @@ export function createTelegramNotifier(bot: Bot) {
     try {
       const target = await db.user.findUnique({ where: { id: userId }, select: { telegramId: true, blocked: true } });
       if (!target || target.blocked) return;
-      await bot.api.sendMessage(target.telegramId, `🇪🇹 GENZI\n\n${input.title}\n${input.body}`, { link_preview_options: { is_disabled: true } });
+      await bot.api.sendMessage(target.telegramId, `${BRAND.mark}\n\n${input.title}\n${input.body}`, { link_preview_options: { is_disabled: true } });
     } catch (error) {
       logger.warn("telegram notification delivery skipped", { userId, error: String(error) });
     }

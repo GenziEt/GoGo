@@ -370,9 +370,13 @@ export const VOICE_RULES = {
   forbidMixedScriptSentences: true,
 } as const;
 
-/** True if text contains Ethiopic-range codepoints (ሀ–፿ incl. punctuation band). */
+/**
+ * True if text contains Ethiopic script. The Ge'ez letter block is U+1200-U+137F.
+ * Amharic titles live entirely in this block (the old U+2D80 range never
+ * matched real Amharic and silently broke the mixed-script voice rule).
+ */
 export function hasEthiopic(text: string): boolean {
-  return /[\u{2D80}-\u{2AFF}\u{1E900}-\u{1E95F}]/u.test(text);
+  return /[\u{1200}-\u{137F}\u{1E7E0}-\u{1E7FF}]/u.test(text);
 }
 
 /** True if text contains basic Latin letters (excluding emoji/latin-1 noise). */
@@ -398,6 +402,28 @@ export function findMixedScriptSentences(text: string, allowlist: readonly strin
     index++;
   }
   return offenders;
+}
+
+/**
+ * Wizard gate for structural categories (Phase 1.1 layout table). A post in a
+ * fact-block / event-block / tldr-keypoints category may not publish while any
+ * required fact field is missing or blank — this is the rule Phase 5's schema
+ * validation enforces at the wizard; here it lives in the theme so the two can
+ * never disagree about which fields are required. Free layouts (media-first,
+ * short-story) have no required fields and always pass.
+ */
+export function missingRequiredFactFields(
+  category: string,
+  values: Record<string, string | undefined>,
+): string[] {
+  const theme = themeFor(category);
+  if (!isStructuralLayout(theme.layout)) return [];
+  const missing: string[] = [];
+  for (const field of theme.factFields) {
+    const raw = values[field.key];
+    if (raw === undefined || raw.trim() === "") missing.push(field.key);
+  }
+  return missing;
 }
 
 // ----------------------------------------------------------------------------
