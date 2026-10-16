@@ -203,6 +203,10 @@ function div(style: Record<string, unknown>, ...children: Array<Block | string>)
   return { type: "div", props: { style, children } };
 }
 
+/** Shared non-accent colors are identical across categories by design (plan §1.2);
+ * reading them from any theme keeps post-theme.ts the single source of truth. */
+const BASE = themeFor("community");
+
 function chipBlock(category: string, locale: "en" | "am"): Block {
   const theme = themeFor(category);
   const label = locale === "am" ? theme.chipLabelAm : theme.chipLabelEn.toUpperCase();
@@ -218,7 +222,7 @@ function chipBlock(category: string, locale: "en" | "am"): Block {
       fontSize: `${chip.sizePx}px`,
       fontWeight: chip.weight,
       lineHeight: chip.lineHeight,
-      letterSpacing: "2px",
+      letterSpacing: `${SHAPES.letterSpacingChip}px`,
     },
     `${theme.emoji} ${escapeHtml(label)}`,
   );
@@ -231,7 +235,7 @@ function titleBlock(title: string): Block {
       fontSize: `${t.sizePx}px`,
       fontWeight: t.weight,
       lineHeight: String(t.lineHeight),
-      color: "#FFFFFF",
+      color: BASE.colors.title,
       fontFamily: "GENZI, Ethiopic",
       marginTop: `${SPACING.loose}px`,
     },
@@ -241,9 +245,10 @@ function titleBlock(title: string): Block {
 
 function factPanelBlock(category: string, values: Record<string, string | undefined>, locale: "en" | "am"): Block | null {
   const theme = themeFor(category);
-  const entries = locale === "am" ? factBlockEntries(category, values) : factBlockEntries(category, values);
   // factBlockEntries already drops empty anchors — graceful fallback (plan §Phase 3
-  // rule shared here: never render an empty anchor or broken panel).
+  // rule shared here: never render an empty anchor or broken panel). Same entries
+  // for both locales; only the label wording differs (amLabel below).
+  const entries = factBlockEntries(category, values);
   if (entries.length === 0) return null;
   const label = TYPOGRAPHY.factLabel;
   const value = TYPOGRAPHY.factValue;
@@ -262,7 +267,7 @@ function factPanelBlock(category: string, values: Record<string, string | undefi
           lineHeight: String(label.lineHeight),
           color: theme.colors.muted,
           textTransform: "uppercase",
-          letterSpacing: "1px",
+          letterSpacing: `${SHAPES.letterSpacingLabel}px`,
         },
         `${e.anchor} ${escapeHtml(locale === "am" ? amLabel(category, e.label) : e.label)}`,
       ),
@@ -283,8 +288,8 @@ function factPanelBlock(category: string, values: Record<string, string | undefi
       display: "flex",
       flexWrap: "wrap",
       gap: `${LAYOUT_METRICS.factRowGap}px`,
-      backgroundColor: "rgba(255,255,255,0.04)",
-      border: `${SHAPES.dividerWidth}px solid rgba(255,255,255,0.08)`,
+      backgroundColor: theme.colors.panelBg,
+      border: `${SHAPES.dividerWidth}px solid ${theme.colors.panelBorder}`,
       borderRadius: `${SHAPES.radiusPanel}px`,
       padding: `${SPACING.loose}px`,
       marginTop: `${SPACING.loose}px`,
@@ -313,8 +318,8 @@ function tldrBlock(body: string): Block {
       {
         fontSize: `${TYPOGRAPHY.factLabel.sizePx}px`,
         fontWeight: TYPOGRAPHY.factLabel.weight,
-        color: "#FFFFFF",
-        letterSpacing: "2px",
+        color: BASE.colors.title,
+        letterSpacing: `${SHAPES.letterSpacingChip}px`,
       },
       "TL;DR",
     ),
@@ -323,7 +328,7 @@ function tldrBlock(body: string): Block {
         fontSize: `${t.sizePx}px`,
         fontWeight: t.weight,
         lineHeight: String(t.lineHeight),
-        color: "#E8ECF4",
+        color: BASE.colors.body,
         fontFamily: "GENZI, Ethiopic",
       },
       escapeHtml(body.trim()),
