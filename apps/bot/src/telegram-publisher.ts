@@ -152,10 +152,7 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
   // so this gate and the wizard's question set are the SAME computation.
   const missingFacts = missingFactFieldsAfterDefaults(
     input.category ?? "",
-    {
-      ...(input.location ? { location: input.location } : {}),
-      ...input.factValues,
-    },
+    effectivePublishFacts(input),
     { linkUrl: input.linkUrl ?? null },
   );
   if (missingFacts.length > 0) {
