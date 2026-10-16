@@ -8,10 +8,10 @@ import { lockPost } from "./post-schema.js";
 import { categoryKeyboard, previewKeyboard } from "./ui.js";
 import { categories } from "./categories.js";
 import { t, type Locale } from "./i18n.js";
-import { getSession, setSession, clearSession, abandonOpenWork, isTextInputStep, isSkipAllowedStep, setPreferCard } from "./session-store.js";
+import { getSession, setSession, clearSession, abandonOpenWork, isTextInputStep, isSkipAllowedStep, setPreferCard, setCaptionAbove, peekCaptionAbove, setSeriesKey, peekSeriesKey } from "./session-store.js";
 import { publishToChannel, deleteChannelMessage, requiredFactFieldsFor } from "./telegram-publisher.js";
 import { buildChannelCaption, buildChannelButtons, parsePlatformLink, attachChannelButtons, withButtonStyle } from "./post-buttons.js";
-import { isStructuralLayout, themeFor, factDefaults, missingFactFieldsAfterDefaults, brandChipLine, type FactFieldSpec } from "./post-theme.js";
+import { isStructuralLayout, themeFor, factDefaults, missingFactFieldsAfterDefaults, brandChipLine, SERIES, type FactFieldSpec } from "./post-theme.js";
 import { renderCard, clampTitle } from "./card-renderer.js";
 import { InputFile } from "grammy";
 import { logger } from "./logger.js";
@@ -219,6 +219,12 @@ interface PreviewContext {
   // Submission id — lets the preview attach the Phase 2 card-choice buttons
   // ("use mine" vs "use GENZI card") when the author supplied media.
   submissionId?: string;
+  // Phase 3 (series visual spec): chosen series key — the preview chip line must
+  // match the channel chip line exactly (WYSIWYG), same value that gets published.
+  seriesKey?: string | null;
+  // Phase 3 (caption position): author's "caption above media" toggle — drives
+  // show_caption_above_media on the preview send so what they see is what ships.
+  captionAbove?: boolean;
 }
 
 // HTML preview (the old Markdown preview was rejected by Telegram whenever the user's text
@@ -237,6 +243,7 @@ function buildPreview(post: Normalized, locale: Locale, ctxInfo: PreviewContext,
     category: post.category,
     locale,
     ...(ctxInfo.factValues ? { factValues: ctxInfo.factValues } : {}),
+    ...(ctxInfo.seriesKey ? { seriesKey: ctxInfo.seriesKey } : {}),
     escapeHtml,
   });
   let caption = render(post.body);
@@ -264,6 +271,7 @@ async function cardPreviewBuffer(
     category: post.category,
     locale,
     factValues: ctxInfo.factValues,
+    ...(ctxInfo.seriesKey ? { seriesKey: ctxInfo.seriesKey } : {}),
     ...(post.body.trim() ? { subtitle: post.body.trim().split("\n\n")[0] } : {}),
   });
   return card?.png ?? null;
@@ -310,8 +318,18 @@ async function sendPreview(
       .text(useCard ? "🟢 🖼️ Use GENZI card" : "⚪ 🖼️ Use GENZI card", `cardchoice:${ctxInfo.submissionId}:genzi`)
       .text(!useCard ? "🟢 📷 Use mine" : "⚪ 📷 Use mine", `cardchoice:${ctxInfo.submissionId}:mine`);
   }
-  for (const row of actionKeyboard.inline_keyboard) {
+  // Phase 3 (caption position): the author's "caption above media" toggle sits next to
+  // the card choice — tapping it persists on the Submission and re-sends the preview so
+  // the caption visibly moves above/below the photo (WYSIWYG with the channel publish).
+  if (ctxInfo.submissionId && (post.mediaType === "image" || post.mediaType === "video")) {
     if (hasImage) keyboard.row();
+    keyboard.text(
+      ctxInfo.captionAbove ? t(locale, "captionAboveOn") : t(locale, "captionAboveOff"),
+      `cappos:${ctxInfo.submissionId}`,
+    );
+  }
+  for (const row of actionKeyboard.inline_keyboard) {
+    if (hasImage || (ctxInfo.submissionId && (post.mediaType === "image" || post.mediaType === "video"))) keyboard.row();
     for (const btn of row) {
       const b = btn as unknown as Record<string, unknown>;
       if (typeof b.url === "string") keyboard.url(String(b.text), b.url);
@@ -323,12 +341,15 @@ async function sendPreview(
     withButtonStyle(keyboard, "success");
     withButtonStyle(keyboard, "danger");
   }
+  // show_caption_above_media is grammY-typed on replyWithPhoto/replyWithVideo captions;
+  // older servers ignore the field and the post still publishes below-caption.
+  const captionOpts = ctxInfo.captionAbove === true ? { show_caption_above_media: true } : {};
   try {
     if (post.mediaType === "image" && post.mediaFileId) {
       const source = useCard ? await cardPreviewBuffer(post, ctxInfo, locale) : null;
-      await ctx.replyWithPhoto(source ? new InputFile(source, "genzi-card-preview.png") : post.mediaFileId, { caption: buildPreview(post, locale, ctxInfo, 1000), parse_mode: "HTML", reply_markup: keyboard });
+      await ctx.replyWithPhoto(source ? new InputFile(source, "genzi-card-preview.png") : post.mediaFileId, { caption: buildPreview(post, locale, ctxInfo, 1000), parse_mode: "HTML", reply_markup: keyboard, ...captionOpts });
     } else if (post.mediaType === "video" && post.mediaFileId) {
-      await ctx.replyWithVideo(post.mediaFileId, { caption: buildPreview(post, locale, ctxInfo, 1000), parse_mode: "HTML", reply_markup: keyboard });
+      await ctx.replyWithVideo(post.mediaFileId, { caption: buildPreview(post, locale, ctxInfo, 1000), parse_mode: "HTML", reply_markup: keyboard, ...captionOpts });
     } else {
       await ctx.reply(buildPreview(post, locale, ctxInfo, 3800), { parse_mode: "HTML", reply_markup: keyboard });
     }
