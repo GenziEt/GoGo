@@ -130,6 +130,26 @@ async function saveFactAnswer(
 }
 
 /**
+ * Phase 3 (series visual spec): the optional recurring-format step between facts
+ * and preview. One row per registered series in post-theme.ts SERIES plus a
+ * "no format" option; tapping a row persists the key on the Submission and moves
+ * straight to the preview, so the chip line and branded card carry it immediately.
+ * Unknown/stale keys can never render: setSeriesKey rejects them and seriesChipLine
+ * falls back to the ordinary category chip (same graceful rule as fact blocks).
+ */
+async function askSeries(ctx: Context, submissionId: string, locale: Locale): Promise<void> {
+  await setSession(ctx.from!.id, submissionId, "series", locale);
+  const current = await peekSeriesKey(submissionId);
+  const keyboard = new InlineKeyboard();
+  for (const spec of Object.values(SERIES)) {
+    const chosen = current === spec.key;
+    keyboard.text(`${chosen ? t(locale, "seriesChosen") : "⬜"} ${spec.chip}`, `series:${spec.key}`).row();
+  }
+  keyboard.text(t(locale, "seriesNone"), "series:none");
+  await ctx.reply(t(locale, "seriesPrompt"), { reply_markup: keyboard });
+}
+
+/**
  * The single finalize path for a wizard post: normalize → moderate → either reject,
  * quarantine, or move to PREVIEW and show it. Structural categories reach here only
  * after their fact fields are complete (the facts step gates them); legacy callers
@@ -181,6 +201,10 @@ async function finalizeToPreview(
     linkPlatform: submission.linkPlatform,
     factValues: facts,
     submissionId: submission.id,
+    // Stored wizard choices (Phase 3): the preview chip line, caption position and
+    // branded card must show exactly what publishes.
+    seriesKey: await peekSeriesKey(submission.id),
+    captionAbove: await peekCaptionAbove(submission.id),
   }, (await getSession(ctx.from!.id))?.preferCard === true);
 }
 
@@ -499,7 +523,67 @@ export function registerPostFlow(bot: Bot): void {
       await sendFactsReview(ctx, key, submission.id, locale);
       return;
     }
-    await finalizeToPreview(ctx, user, sub, key, locale);
+    // Free-layout posts visit the optional series step before finalizing (§3 series spec).
+    await askSeries(ctx, submission.id, locale);
+  });
+
+  // Series picker (Phase 3): tap a registered format → persist + finalize; "none" clears.
+  // Stale rows from an old message can't advance a flow that isn't at the series step.
+  bot.callbackQuery(/^series:(.+)$/, async (ctx) => {
+    if (!ctx.from || !isPrivate(ctx)) return ctx.answerCallbackQuery();
+    const user = await getUser(ctx);
+    const locale = toI18nLocale(user.locale);
+    const session = await getSession(ctx.from.id);
+    const submissionId = session?.submissionId;
+    if (!session || !submissionId || session.step !== "series")
+      return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+    const key = ctx.match[1]!;
+    const submission = await db.submission.findUnique({ where: { id: submissionId } });
+    if (!submission || submission.userId !== user.id || submission.state !== "INPUT" || !submission.category || !submission.title || !submission.body) {
+      await clearSession(ctx.from.id);
+      return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+    }
+    if (key !== "none" && !seriesFor(key)) return ctx.answerCallbackQuery();
+    await setSeriesKey(submissionId, key === "none" ? null : key);
+    await ctx.answerCallbackQuery(key === "none" ? t(locale, "seriesSkipped") : undefined);
+    const sub = submission as typeof submission & { category: string; title: string; body: string };
+    await finalizeToPreview(ctx, user, sub, sub.category, locale);
+  });
+
+  // Caption-position toggle on the preview (Phase 3): persists on the Submission and
+  // re-sends the preview so the caption visibly moves above/below the media (WYSIWYG).
+  bot.callbackQuery(/^cappos:([^:]+)$/, async (ctx) => {
+    if (!ctx.from || !isPrivate(ctx)) return ctx.answerCallbackQuery();
+    const user = await getUser(ctx);
+    const locale = toI18nLocale(user.locale);
+    const session = await getSession(ctx.from.id);
+    const submissionId = session?.submissionId;
+    if (!session || !submissionId || session.step !== "preview")
+      return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+    if (ctx.match[1] !== submissionId) return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+    const submission = await db.submission.findUnique({ where: { id: submissionId } });
+    if (!submission || submission.state !== "PREVIEW" || !submission.normalizedJson)
+      return ctx.answerCallbackQuery(t(locale, "notReady"));
+    const nextValue = !(await peekCaptionAbove(submissionId));
+    await setCaptionAbove(submissionId, nextValue);
+    await ctx.answerCallbackQuery(nextValue ? t(locale, "captionAboveOn") : t(locale, "captionAboveOff"));
+    const normalized = JSON.parse(submission.normalizedJson) as Normalized;
+    await sendPreview(
+      ctx,
+      normalized,
+      locale,
+      {
+        slug: normalized.slug,
+        author: user.firstName ?? "GENZI",
+        linkUrl: submission.linkUrl,
+        linkPlatform: submission.linkPlatform,
+        factValues: effectiveFacts(normalized.category, submission),
+        submissionId,
+        seriesKey: await peekSeriesKey(submissionId),
+        captionAbove: nextValue,
+      },
+      session.preferCard === true,
+    );
   });
 
   // Facts review screen: tap a field row → collect one answer as text ("fact:<key>" sub-step).
