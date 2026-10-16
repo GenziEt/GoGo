@@ -8,7 +8,7 @@ import { lockPost } from "./post-schema.js";
 import { categoryKeyboard, previewKeyboard } from "./ui.js";
 import { categories } from "./categories.js";
 import { t, type Locale } from "./i18n.js";
-import { getSession, setSession, clearSession, abandonOpenWork } from "./session-store.js";
+import { getSession, setSession, clearSession, abandonOpenWork, isTextInputStep, isSkipAllowedStep } from "./session-store.js";
 import { publishToChannel, deleteChannelMessage, requiredFactFieldsFor } from "./telegram-publisher.js";
 import { buildChannelCaption, buildChannelButtons, parsePlatformLink, attachChannelButtons, withButtonStyle } from "./post-buttons.js";
 import { isStructuralLayout, themeFor, factDefaults, missingFactFieldsAfterDefaults, type FactFieldSpec } from "./post-theme.js";
@@ -392,11 +392,11 @@ export function registerPostFlow(bot: Bot): void {
       return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
     }
     await ctx.answerCallbackQuery();
-    await setSession(ctx.from.id, submissionId, `fact:${key}`, locale);
+    // The step encodes BOTH field key and category so the text-input handler (which only
+    // sees the session) can route the answer back to the right fact field.
+    await setSession(ctx.from.id, submissionId, `fact:${category}:${key}`, locale);
     const current = effectiveFacts(category!, submission)[key!]?.trim();
-    await ctx.reply(
-      `${field.anchor} ${labelForField(field, locale)}${current ? `\n(${current.slice(0, 120)})` : ""}\n\n/send /skip to clear`,
-    );
+    await ctx.reply(`${field.anchor} ${labelForField(field, locale)}${current ? `\n(${current.slice(0, 120)})` : ""}`);
   });
 
   // Facts review screen: Done is only rendered when every required field is filled, but a
@@ -556,10 +556,12 @@ export function registerPostFlow(bot: Bot): void {
       return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
     // Back to INPUT so an old preview's Publish button can't publish stale content mid-edit.
     // The link fields are cleared too — re-running the wizard must not silently reuse a stale
-    // link (the Link step is optional, /skip resets it to null).
+    // link (the Link step is optional, /skip resets it to null). factsJson is reset for the
+    // same reason: fact defaults derive from the link, and a re-run may pick a different
+    // category whose required fields differ; the facts step will re-ask everything fresh.
     const reopened = await db.submission.updateMany({
       where: { id: submissionId, userId: user.id, state: "PREVIEW" },
-      data: { state: "INPUT", mediaType: null, mediaFileId: null, linkUrl: null, linkPlatform: null },
+      data: { state: "INPUT", mediaType: null, mediaFileId: null, linkUrl: null, linkPlatform: null, factsJson: null },
     });
     if (reopened.count === 0) return ctx.answerCallbackQuery(t(locale, "notReady"));
     await setSession(ctx.from.id, submissionId, "title", locale);
@@ -588,12 +590,16 @@ export function registerPostFlow(bot: Bot): void {
     const session = await getSession(ctx.from.id);
     const submissionId = session?.submissionId;
     if (!session || !submissionId) return next();
-    if (session.step !== "title" && session.step !== "body" && session.step !== "media" && session.step !== "link" && session.step !== "category") return next();
+    // Only text-input steps consume the user's message here; "facts" (button-driven review
+    // screen) and "preview" fall through to next(). isTextInputStep also covers the
+    // "fact:<category>:<key>" sub-steps.
+    if (!isTextInputStep(session.step)) return next();
 
     const text = ctx.message.text ?? ctx.message.caption ?? "";
     // Commands (/help, /language ...) pass through to their handlers instead of being saved as
-    // the title/body. /skip is the one command this wizard owns (media + link steps).
-    if (text.startsWith("/") && !((session.step === "media" || session.step === "link") && text === "/skip")) return next();
+    // the title/body. /skip is the one command this wizard owns (media + link steps, and
+    // clearing an individual fact field).
+    if (text.startsWith("/") && !(isSkipAllowedStep(session.step) && text === "/skip")) return next();
 
     const user = await getUser(ctx);
     const locale = session.locale === "ENGLISH" ? "en" : "am";
@@ -621,6 +627,33 @@ export function registerPostFlow(bot: Bot): void {
       await ctx.reply(check.category === "LINK" ? t(locale, "linkDenied") : t(locale, "rejected"));
       return true;
     };
+
+    // step starts with "fact:" — one structured fact-block field is being answered.
+    // Step format: "fact:<category>:<key>" (set by the factedit callback). /skip clears
+    // the field back to Missing; saveFactAnswer re-moderates and returns to the review screen.
+    if (session.step.startsWith("fact:")) {
+      const parts = session.step.split(":");
+      const category = parts[1]!;
+      const key = parts[2]!;
+      const fields = requiredFactFieldsFor(category);
+      const field = fields.find((f) => f.key === key);
+      if (!field || submission.category !== category) {
+        // Stale sub-step (category changed underneath us): drop back to a safe state.
+        await clearSession(ctx.from.id);
+        await ctx.reply(t(locale, "sessionExpired"));
+        return;
+      }
+      if (text === "/skip") {
+        await saveFactAnswer(ctx, user, submissionId, category, key, null, locale);
+        return;
+      }
+      if (!text.trim() || text.length > 300) {
+        await ctx.reply(`${t(locale, "factInvalid")}\n${field.anchor} ${labelForField(field, locale)} — ${t(locale, "factEditLabel")}`);
+        return;
+      }
+      await saveFactAnswer(ctx, user, submissionId, category, key, text, locale);
+      return;
+    }
 
     if (session.step === "title") {
       if (!text || text.length > 100) {

@@ -17,6 +17,24 @@ function parseTags(raw: string | null | undefined): string[] {
   }
 }
 
+// Structured fact-block values persisted by the wizard (Submission/Post.factsJson).
+// Corrupted JSON is treated as empty — the publish gate in telegram-publisher.ts then
+// names the missing fields, exactly like it does for a post that never went through
+// the facts step.
+function parseFacts(raw: string | null | undefined): Record<string, string> {
+  try {
+    const value: unknown = JSON.parse(raw ?? "{}");
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (typeof v === "string" && v.trim()) out[k] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 export async function performModerationAction(bot: Bot, submissionId: string, moderator: User, decision: AdminDecision) {
   const submission = await db.submission.findUnique({ where: { id: submissionId }, include: { user: true } });
   if (!submission) throw new Error("Submission not found");
@@ -56,7 +74,11 @@ export async function performModerationAction(bot: Bot, submissionId: string, mo
           ...(hidden.mediaType && hidden.mediaFileId ? { mediaType: hidden.mediaType, mediaFileId: hidden.mediaFileId } : {}),
           ...(hidden.location ? { location: hidden.location } : {}),
           category: hidden.category,
-          readingMinutes: hidden.readingMinutes
+          readingMinutes: hidden.readingMinutes,
+          // Same gate + defaults as the wizard path; a quarantined API post with a link
+          // satisfies its How/Tickets/Source anchor through factDefaults.
+          factValues: parseFacts(hidden.factsJson),
+          linkUrl: hidden.linkUrl
         });
         post = await db.post.update({
           where: { id: hidden.id },
@@ -83,7 +105,11 @@ export async function performModerationAction(bot: Bot, submissionId: string, mo
           ...(locked.media.fileId ? { mediaFileId: locked.media.fileId } : {}),
           ...(locked.metadata.location ? { location: locked.metadata.location } : {}),
           category: locked.metadata.category,
-          readingMinutes: locked.metadata.readingMinutes
+          readingMinutes: locked.metadata.readingMinutes,
+          // Wizard-collected fact fields ride along so the gate sees the same values the
+          // author filled (and the preview showed) before quarantine.
+          factValues: parseFacts(submission.factsJson),
+          linkUrl
         });
         post = await db.post.create({
           data: {
@@ -98,6 +124,9 @@ export async function performModerationAction(bot: Bot, submissionId: string, mo
             mediaAspect: locked.media.aspectRatio ?? null,
             altText: locked.metadata.altText ?? null,
             location: locked.metadata.location ?? null,
+            // Persist the wizard-collected fact fields on the published row too, so a later
+            // re-publish (or Phase 2 card render) sees exactly what gated this post.
+            factsJson: submission.factsJson ?? null,
             linkUrl,
             linkPlatform,
             readingMinutes: locked.metadata.readingMinutes,
