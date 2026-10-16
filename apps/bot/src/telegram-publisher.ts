@@ -3,7 +3,7 @@ import { InputFile } from "grammy";
 import { env } from "./config.js";
 import { logger } from "./logger.js";
 import { buildChannelCaption, buildChannelCaptionPlain, buildCaptionParts } from "./post-buttons.js";
-import { factDefaults, missingFactFieldsAfterDefaults, themeFor, type FactFieldSpec } from "./post-theme.js";
+import { factDefaults, missingFactFieldsAfterDefaults, themeFor, VOICE_RULES, type FactFieldSpec } from "./post-theme.js";
 import { renderCard } from "./card-renderer.js";
 
 // Every channel post is built with the shared premium caption (brand header, spaced body,
@@ -48,10 +48,16 @@ type PublishInput = {
   // chip, exactly like the caption does. Null/unknown = ordinary category chip.
   seriesKey?: string | null;
   // Phase 3 (expandable quotes): characters of body kept visible in the feed for
-  // long posts; the remainder threads as "continued below ↓" replies. Short posts
-  // and callers that omit it are unaffected — the split only kicks in when the
-  // body clearly exceeds this length.
+  // long posts; the remainder threads as "continued below ↓" replies. Defaults to
+  // VOICE_RULES.feedVisibleBodyChars from post-theme.ts — the split point is a
+  // design token, never hardcoded at a call site. Short posts are unaffected:
+  // buildCaptionParts only splits when the body clearly exceeds this length.
   expandAfterChars?: number;
+  // Phase 3 (link previews): posts carrying an official platform link get Telegram's
+  // large link preview ABOVE the caption text instead of the default small strip
+  // under it. Derived from linkUrl by the caller-less paths, so every publish route
+  // controls previews identically without knowing about this flag.
+  preferLargePreview?: boolean;
 };
 
 // Telegram hard limits: 4096 chars per text message, 1024 per media caption. The post wizard
@@ -90,9 +96,21 @@ function premiumCaption(input: PublishInput): string {
     // published post renders the same anchored rows the author saw in preview.
     ...(input.factValues ? { factValues: input.factValues } : {}),
     ...(input.seriesKey !== undefined && input.seriesKey !== null ? { seriesKey: input.seriesKey } : {}),
-    ...(input.expandAfterChars ? { expandAfterChars: input.expandAfterChars } : {}),
+    // Expandable quotes: the split point is VOICE_RULES.feedVisibleBodyChars unless a
+    // caller overrides it. On the single-message path buildChannelCaption consumes the
+    // visible lead only; hiddenBody goes to threaded replies below.
+    ...(input.expandAfterChars || VOICE_RULES.feedVisibleBodyChars ? { expandAfterChars: input.expandAfterChars ?? VOICE_RULES.feedVisibleBodyChars } : {}),
     escapeHtml,
   });
+}
+
+// Phase 3 (link previews): Telegram shows a large webpage preview ABOVE the text when
+// prefer_large_media is set with an optional caption (Bot API 9.x). Only meaningful for
+// link-bearing posts WITHOUT media — a photo/video message already owns the visual slot,
+// and forcing both flags there would fight the card. Older servers ignore unknown fields.
+function linkPreviewOptions(input: PublishInput, hasMediaOrCard: boolean): Record<string, unknown> | undefined {
+  if (!input.preferLargePreview || !input.linkUrl?.trim() || hasMediaOrCard) return undefined;
+  return { prefer_large_media: true, show_caption_above_media: input.captionAbove === true };
 }
 
 /**
@@ -151,6 +169,12 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
   // Effective facts (defaults + wizard answers + legacy location mapping) computed ONCE,
   // after the gate passed — every render path below consumes these so preview == channel.
   const publishInput: PublishInput = { ...input, factValues: effectivePublishFacts(input) };
+  // Link-preview control (Phase 3): any post with an official platform link gets the
+  // large preview above the text unless a caller explicitly opted out. Derived once
+  // here so every publish path (wizard, admin approve, API) behaves identically.
+  if (publishInput.preferLargePreview === undefined && publishInput.linkUrl?.trim()) {
+    publishInput.preferLargePreview = true;
+  }
   const caption = premiumCaption(publishInput);
 
   // ---- Phase 2: branded card ------------------------------------------------
@@ -185,7 +209,12 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
     // type bundle yet — set it through a loose record (same pattern as withButtonStyle).
     // Older servers/clients ignore the unknown field; the post still publishes below-caption.
     const opts: Record<string, unknown> = html ? { caption: cap, parse_mode: "HTML" } : { caption: cap };
-    if (input.captionAbove === true) opts.caption_position = "Top";
+    if (input.captionAbove === true) opts.show_caption_above_media = true;
+    // Large link preview alongside a photo caption (Phase 3): only when the post also
+    // carries an official platform link — prefer_large_media keeps it big, not a strip.
+    if (publishInput.preferLargePreview && publishInput.linkUrl?.trim()) {
+      opts.link_preview_options = { prefer_large_media: true, show_caption_above_media: input.captionAbove === true };
+    }
     // A rendered card is a raw PNG buffer — grammY only accepts buffers via InputFile.
     // file_id strings (author media) pass through untouched. Videos are always file_ids.
     const payload = typeof source === "string" ? source : new InputFile(source, "genzi-card.png");
@@ -210,13 +239,15 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
     }
   }
   if (!hasMedia && caption.length <= 4000) {
+    // Large link preview above the text (Phase 3): only for link posts with no media.
+    const previewOpts = linkPreviewOptions(publishInput, false);
     try {
-      const msg = await bot.api.sendMessage(channel, caption, { parse_mode: "HTML" });
+      const msg = await bot.api.sendMessage(channel, caption, { parse_mode: "HTML", ...(previewOpts ? { link_preview_options: previewOpts as never } : {}) });
       return { chatId: String(channel), messageId: msg.message_id };
     } catch (error) {
       logger.warn("channel message HTML rejected, falling back to plain text", { error: String(error) });
       const plain = buildChannelCaptionPlain({ ...publishInput, readingMinutes: publishInput.readingMinutes ?? 1, publishedAt: new Date() }).slice(0, 4000);
-      const msg = await bot.api.sendMessage(channel, plain);
+      const msg = await bot.api.sendMessage(channel, plain, previewOpts ? { link_preview_options: previewOpts as never } : undefined);
       return { chatId: String(channel), messageId: msg.message_id };
     }
   }
@@ -227,6 +258,11 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
   //    Splitting happens on the RAW body and each piece is escaped separately, so HTML tags and
   //    entities are never cut in half (the old code sliced finished HTML and then re-sent the
   //    whole body again, duplicating text).
+  //    Expandable quotes (Phase 3): buildCaptionParts splits the raw body at the theme's
+  //    feed-visible length; `hiddenBody` (the remainder) threads as replies INSTEAD of
+  //    overflowing the first message — a long post stays short in the feed and readers
+  //    choose to expand. The "…continued below ↓" marker is added when anything moved.
+  const expand = publishInput.expandAfterChars ?? VOICE_RULES.feedVisibleBodyChars;
   const parts = buildCaptionParts({
     title: publishInput.title,
     body: publishInput.body,
@@ -238,26 +274,27 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
     ...(publishInput.category ? { category: publishInput.category } : {}),
     ...(publishInput.factValues ? { factValues: publishInput.factValues } : {}),
     ...(input.seriesKey !== undefined && input.seriesKey !== null ? { seriesKey: input.seriesKey } : {}),
+    expandAfterChars: expand,
     escapeHtml,
   });
   const budget = hasMedia ? CAPTION_LIMIT : TEXT_CHUNK;
   const room = Math.max(200, Math.floor((budget - parts.head.length - parts.tail.length - 40) * 0.8));
-  const [firstBody = "", ...restChunks] = splitText(input.body, room);
-  const rest = restChunks.join("\n\n");
+  const [firstBody = "", ...restChunks] = splitText(parts.body, room);
+  const rest = [...restChunks, parts.hiddenBody].filter(Boolean).join("\n\n");
   const more = rest ? "\n\n<i>…continued below ↓</i>" : "";
-  const firstChunk = `${parts.head}\n\n${escapeHtml(firstBody)}${more}${parts.tail}`;
+  const firstChunk = `${parts.head}\n\n${firstBody}${more}${parts.tail}`;
   let firstId: number;
   if (hasMedia) {
     const msg = await sendPhotoOrVideo(cardBuffer ?? (input.mediaFileId as string), firstChunk.slice(0, CAPTION_LIMIT), true);
     firstId = msg.message_id;
   } else {
-    const msg = await bot.api.sendMessage(channel, firstChunk, { parse_mode: "HTML" });
+    const previewOpts = linkPreviewOptions(publishInput, false);
+    const msg = await bot.api.sendMessage(channel, firstChunk, { parse_mode: "HTML", ...(previewOpts ? { link_preview_options: previewOpts as never } : {}) });
     firstId = msg.message_id;
   }
   for (const chunk of splitText(rest, TEXT_CHUNK)) {
     if (!chunk) continue;
-    await bot.api.sendMessage(channel, escapeHtml(chunk), {
-      parse_mode: "HTML",
+    await bot.api.sendMessage(channel, chunk, {
       reply_parameters: { message_id: firstId, allow_sending_without_reply: true },
     });
   }
