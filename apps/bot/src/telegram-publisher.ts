@@ -3,6 +3,7 @@ import { env } from "./config.js";
 import { logger } from "./logger.js";
 import { buildChannelCaption, buildChannelCaptionPlain, buildCaptionParts } from "./post-buttons.js";
 import { factDefaults, missingFactFieldsAfterDefaults, themeFor, type FactFieldSpec } from "./post-theme.js";
+import { renderCard } from "./card-renderer.js";
 
 // Every channel post is built with the shared premium caption (brand header, spaced body,
 // "👤 Author · 📅 8 Oct 2026" footer) so the private preview and the published post are
@@ -27,6 +28,15 @@ type PublishInput = {
   // The post's own platform link. Feeds factDefaults (link → How/Tickets/Source
   // anchors) so the gate matches the wizard's question set exactly.
   linkUrl?: string | null;
+  // Phase 2 branded-card controls:
+  //   cardSlug    — cache key for the generated card (the post slug). When ABSENT,
+  //                 no card is generated (legacy/API paths keep current behavior;
+  //                 wiring slugs through those callers is a follow-up step).
+  //   preferCard  — "use GENZI card" chosen by the author even though media exists.
+  //   locale      — chip language on the card (en/am). Defaults to "en".
+  cardSlug?: string;
+  preferCard?: boolean;
+  locale?: "en" | "am";
 };
 
 // Telegram hard limits: 4096 chars per text message, 1024 per media caption. The post wizard
@@ -120,26 +130,57 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
   // Blocked structural posts lose their media on purpose: a half-filled fact block
   // must never render, and the full premium caption (with the category chip header)
   // is the fallback surface. Complete posts keep their media untouched.
-  const hasMedia = (input.mediaType === "image" || input.mediaType === "video") && Boolean(input.mediaFileId);
+  let hasMedia = (input.mediaType === "image" || input.mediaType === "video") && Boolean(input.mediaFileId);
   // Effective facts (defaults + wizard answers + legacy location mapping) computed ONCE,
   // after the gate passed — every render path below consumes these so preview == channel.
   const publishInput: PublishInput = { ...input, factValues: effectivePublishFacts(input) };
   const caption = premiumCaption(publishInput);
 
+  // ---- Phase 2: branded card ------------------------------------------------
+  // Behavior contract (plan §2.3):
+  //   • author attached NO image → generate the GENZI card and attach it
+  //   • author attached an image → honor their explicit "use GENZI card" choice
+  //     (preferCard); otherwise their media wins untouched
+  //   • slug absent → feature not wired for this caller; behave exactly as before
+  //   • generation FAILS → post publishes text-only; publishing is never blocked
+  // The card replaces media only for IMAGE posts — a video is the content itself,
+  // and a card standing in for it would misrepresent the post.
+  let cardBuffer: Buffer | null = null;
+  if (input.cardSlug?.trim() && (!hasMedia || (input.preferCard && input.mediaType === "image"))) {
+    const card = await renderCard({
+      slug: input.cardSlug,
+      title: input.title,
+      category: input.category ?? "",
+      locale: input.locale ?? "en",
+      factValues: publishInput.factValues,
+      ...(input.body.trim() ? { subtitle: input.body.trim().split("\n\n")[0] } : {}),
+    });
+    if (card) {
+      cardBuffer = card.png;
+      hasMedia = true; // route through the existing sendPhoto paths below
+    } else {
+      logger.warn("card generation failed; publishing without card", { slug: input.cardSlug });
+    }
+  }
+  const sendPhotoOrVideo = async (source: string | Buffer, cap: string, html: boolean) => {
+    const opts = html ? { caption: cap, parse_mode: "HTML" as const } : { caption: cap };
+    return hasVideo
+      ? bot.api.sendVideo(channel, source as string, opts)
+      : bot.api.sendPhoto(channel, source, opts);
+  };
+  const hasVideo = input.mediaType === "video" && !cardBuffer;
+
   // 1) Everything fits in one message / one caption — the common case.
   if (hasMedia && caption.length <= CAPTION_LIMIT) {
+    const source = cardBuffer ?? (input.mediaFileId as string);
     try {
-      const msg = input.mediaType === "image"
-        ? await bot.api.sendPhoto(channel, input.mediaFileId as string, { caption, parse_mode: "HTML" })
-        : await bot.api.sendVideo(channel, input.mediaFileId as string, { caption, parse_mode: "HTML" });
+      const msg = await sendPhotoOrVideo(source, caption, true);
       return { chatId: String(channel), messageId: msg.message_id };
     } catch (error) {
       // HTML parse failure on user content: retry once with the plain-text twin.
       logger.warn("channel caption HTML rejected, falling back to plain text", { error: String(error) });
       const plain = buildChannelCaptionPlain({ ...publishInput, readingMinutes: publishInput.readingMinutes ?? 1, publishedAt: new Date() }).slice(0, CAPTION_LIMIT);
-      const msg = input.mediaType === "image"
-        ? await bot.api.sendPhoto(channel, input.mediaFileId as string, { caption: plain })
-        : await bot.api.sendVideo(channel, input.mediaFileId as string, { caption: plain });
+      const msg = await sendPhotoOrVideo(source, plain, false);
       return { chatId: String(channel), messageId: msg.message_id };
     }
   }
@@ -181,9 +222,7 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
   const firstChunk = `${parts.head}\n\n${escapeHtml(firstBody)}${more}${parts.tail}`;
   let firstId: number;
   if (hasMedia) {
-    const msg = input.mediaType === "image"
-      ? await bot.api.sendPhoto(channel, input.mediaFileId as string, { caption: firstChunk.slice(0, CAPTION_LIMIT), parse_mode: "HTML" })
-      : await bot.api.sendVideo(channel, input.mediaFileId as string, { caption: firstChunk.slice(0, CAPTION_LIMIT), parse_mode: "HTML" });
+    const msg = await sendPhotoOrVideo(cardBuffer ?? (input.mediaFileId as string), firstChunk.slice(0, CAPTION_LIMIT), true);
     firstId = msg.message_id;
   } else {
     const msg = await bot.api.sendMessage(channel, firstChunk, { parse_mode: "HTML" });
