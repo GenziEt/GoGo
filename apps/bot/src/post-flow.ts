@@ -42,6 +42,31 @@ function extractTags(body: string): string[] {
 
 type FactValues = Record<string, string>;
 
+// ---- Phase 2: author's card choice ("use mine" vs "use GENZI card") --------
+// Stored inside the submission's factsJson under a reserved key (no schema
+// migration needed). parseFacts strips it before values reach the publish
+// gate and the caption renderer — it is metadata, never a fact row.
+const CARD_CHOICE_KEY = "_card";
+
+function parseCardChoice(raw: string | null | undefined): boolean {
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return !!parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      && (parsed as Record<string, unknown>)[CARD_CHOICE_KEY] === "genzi";
+  } catch {
+    return false;
+  }
+}
+
+async function setCardChoice(submissionId: string, useGenziCard: boolean): Promise<void> {
+  const submission = await db.submission.findUnique({ where: { id: submissionId } });
+  const facts = parseFacts(submission?.factsJson);
+  if (useGenziCard) facts[CARD_CHOICE_KEY] = "genzi";
+  else delete facts[CARD_CHOICE_KEY];
+  await db.submission.update({ where: { id: submissionId }, data: { factsJson: JSON.stringify(facts) } });
+}
+
 function parseFacts(raw: string | null | undefined): FactValues {
   if (!raw) return {};
   try {
@@ -49,7 +74,7 @@ function parseFacts(raw: string | null | undefined): FactValues {
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const out: FactValues = {};
       for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-        if (typeof v === "string") out[k] = v;
+        if (typeof v === "string" && k !== CARD_CHOICE_KEY) out[k] = v;
       }
       return out;
     }
@@ -207,6 +232,9 @@ interface PreviewContext {
   // Structured fact values (effective = theme defaults + wizard answers) so the
   // private preview renders the exact anchored rows that will go live (WYSIWYG).
   factValues?: Record<string, string | undefined>;
+  // Submission id — lets the preview attach the Phase 2 card-choice buttons
+  // ("use mine" vs "use GENZI card") when the author supplied media.
+  submissionId?: string;
 }
 
 // HTML preview (the old Markdown preview was rejected by Telegram whenever the user's text
@@ -259,9 +287,21 @@ async function sendPreview(ctx: Context, post: Normalized, locale: Locale, ctxIn
         "danger",
       )
     : previewKeyboard(locale);
+  // Phase 2 (plan §2.3): the author attached an IMAGE → they choose between their
+  // own media and a generated GENZI card. The choice row sits directly above the
+  // action rows; "use mine" is the default when untouched. Videos are never
+  // offered for replacement — the video IS the content.
+  const hasImage = post.mediaType === "image" && Boolean(post.mediaFileId) && Boolean(ctxInfo.submissionId);
+  const useCard = hasImage && parseCardChoice(await peekFactsJson(ctxInfo.submissionId as string));
+  if (hasImage) {
+    const choiceRow = new InlineKeyboard()
+      .text(useCard ? "🟢 🖼️ Use GENZI card" : "⚪ 🖼️ Use GENZI card", `cardchoice:${ctxInfo.submissionId}:genzi`)
+      .text(!useCard ? "🟢 📷 Use mine" : "⚪ 📷 Use mine", `cardchoice:${ctxInfo.submissionId}:mine`);
+    keyboard.insertBeforeRow?.(choiceRow.build());
+  }
   try {
     if (post.mediaType === "image" && post.mediaFileId) {
-      await ctx.replyWithPhoto(post.mediaFileId, { caption: buildPreview(post, locale, ctxInfo, 1000), parse_mode: "HTML", reply_markup: keyboard });
+      await ctx.replyWithPhoto(useCard ? (await cardPreviewBuffer(ctxInfo, post)) ?? post.mediaFileId : post.mediaFileId, { caption: buildPreview(post, locale, ctxInfo, 1000), parse_mode: "HTML", reply_markup: keyboard });
     } else if (post.mediaType === "video" && post.mediaFileId) {
       await ctx.replyWithVideo(post.mediaFileId, { caption: buildPreview(post, locale, ctxInfo, 1000), parse_mode: "HTML", reply_markup: keyboard });
     } else {
@@ -462,6 +502,10 @@ export function registerPostFlow(bot: Bot): void {
     const locked = lockPost(normalized, author);
     const linkUrl = submission.linkUrl ?? locked.metadata.link ?? null;
     const linkPlatform = submission.linkPlatform ?? locked.metadata.linkPlatform ?? null;
+    // Phase 2 card identity: the slug is deterministic BEFORE the Post row exists
+    // (same formula as db.post.create below), so the branded card can be generated
+    // and attached during publication itself. Cached by this exact slug.
+    const cardSlug = `${locked.metadata.slug}-${Date.now()}`;
     let telegramPublication: { chatId: string; messageId: number };
     try {
       telegramPublication = await publishToChannel(bot, {
@@ -478,6 +522,11 @@ export function registerPostFlow(bot: Bot): void {
         // them against post-theme.ts before anything reaches the channel.
         factValues: parseFacts(submission.factsJson),
         linkUrl,
+        // Branded card controls (plan §2.3): no media → card is generated and attached;
+        // media present → author's stored choice decides ("use mine" wins unless preferCard).
+        cardSlug,
+        preferCard: session?.preferCard === true,
+        locale: locale === "AMHARIC" ? "am" : "en",
       });
     } catch (error) {
       logger.error("GENZI channel publication failed", { error: String(error) });
