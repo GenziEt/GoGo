@@ -2,10 +2,17 @@ import { db } from "./db.js";
 import type { Locale } from "./i18n.js";
 import type { Locale as PrismaLocale } from "@prisma/client";
 
-export type Step = "title" | "body" | "media" | "link" | "category" | "preview";
+export type Step = "title" | "body" | "media" | "link" | "category" | "facts" | "fact:<key>" | "preview";
+// Wizard steps that accept free TEXT input (everything except the preview).
+// The "facts" step is a review screen driven by inline buttons; each
+// "fact:<key>" sub-step collects one structured fact-block value as text.
+const TEXT_INPUT_STEPS: readonly string[] = ["title", "body", "media", "link", "category"];
+export function isTextInputStep(step: string): boolean {
+  return TEXT_INPUT_STEPS.includes(step) || step.startsWith("fact:");
+}
 // Confirms the post wizard's /skip command (media + link steps) and nothing else — the
 // confession flow treats any "/..." as a pass-through command.
-export const POST_WIZARD_STEPS: readonly Step[] = ["title", "body", "media", "link", "category", "preview"] as const;
+export const POST_WIZARD_STEPS: readonly Step[] = ["title", "body", "media", "link", "category", "facts", "preview"] as const;
 export type ConfessionStep = "confession_body" | "confession_confirm";
 
 export function toPrismaLocale(locale: Locale): PrismaLocale {

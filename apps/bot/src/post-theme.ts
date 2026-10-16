@@ -437,6 +437,44 @@ export const BRAND = {
   channelHandle: "@genzi_et",
 } as const;
 
+// ----------------------------------------------------------------------------
+// 10b. Fact-block defaults (Phase 5: "Defaults are applied where sensible")
+// ----------------------------------------------------------------------------
+// Auto-filled values that satisfy a required field WITHOUT inventing content:
+//   • money "link" / events "tickets" ← the post's own platform link (the How
+//     to apply IS the link the author pasted).
+//   • ai-tech "source" ← same platform link, else the official channel link
+//     (a tech story without a source is gossip — this stays a required field).
+// Anything else must come from the author via the wizard's facts step.
+
+export function factDefaults(
+  category: string,
+  ctx: { linkUrl?: string | null },
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  const theme = themeFor(category);
+  if (!isStructuralLayout(theme.layout)) return out;
+  for (const field of theme.factFields) {
+    if (field.key === "link" && ctx.linkUrl) out.link = ctx.linkUrl;
+    if (field.key === "source" && ctx.linkUrl) out.source = ctx.linkUrl;
+  }
+  return out;
+}
+
+/**
+ * Required fields still missing AFTER sensible defaults are applied — the exact
+ * list the wizard asks the author to fill, and the same computation the publish
+ * gate uses, so the question set and the gate can never disagree.
+ */
+export function missingFactFieldsAfterDefaults(
+  category: string,
+  values: Record<string, string | undefined>,
+  ctx: { linkUrl?: string | null },
+): string[] {
+  const merged = { ...factDefaults(category, ctx), ...values };
+  return missingRequiredFactFields(category, merged);
+}
+
 /**
  * Header chip for a post, e.g. "🇪🇹 GENZI · 💰 OPPORTUNITY" (en) or
  * "🇪🇹 GENZI · 💰 እድል" (am). Every post gets its category's chip — never the
