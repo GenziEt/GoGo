@@ -130,6 +130,39 @@ export async function dispatchDueSeriesEpisodes(bot: Bot): Promise<number> {
       });
       published++;
       logger.info("series episode published", { seriesKey: key, slug: post.slug, occurrenceDate });
+
+      // Phase 4 (plan §Poll follow-ups): "Which one?" poll attached to the episode.
+      // Poll content is authored alongside the episode (pollQuestion/pollOptionsJson
+      // on Post) — the scheduler never invents options, matching the no-filler rule.
+      // Best-effort: a failed poll send never un-publishes the episode.
+      try {
+        const pollOptions = parsePollOptions(post.pollOptionsJson);
+        if (post.pollQuestion && pollOptions.length >= 2) {
+          await bot.api.sendPoll(result.chatId, post.pollQuestion, pollOptions, {
+            reply_parameters: { message_id: result.messageId },
+          });
+        }
+      } catch (error) {
+        logger.warn("series poll follow-up failed (non-fatal)", { seriesKey: key, slug: post.slug, error: String(error) });
+      }
+
+      // Phase 4 (plan §Daily quiz): reuse the existing Quiz model — pick the newest
+      // active quiz whose category matches the episode's category (fallback: any
+      // active quiz), render its first question as a Telegram QUIZ-mode poll replied
+      // under the episode. No quiz rows exist → skip silently. Best-effort again.
+      try {
+        const quizPoll = await buildDailyQuizPoll(post.category);
+        if (quizPoll) {
+          await bot.api.sendPoll(result.chatId, quizPoll.question, quizPoll.options, {
+            type: "quiz",
+            correct_option_id: quizPoll.correctIndex,
+            is_anonymous: true,
+            reply_parameters: { message_id: result.messageId },
+          });
+        }
+      } catch (error) {
+        logger.warn("daily quiz poll failed (non-fatal)", { seriesKey: key, slug: post.slug, error: String(error) });
+      }
     } catch (error) {
       // Slot stays claimed (value already DONE) so a broken post can't spam-retry
       // every 60s; the failure is logged for an operator to fix and re-run.
@@ -151,6 +184,47 @@ function safeParseFacts(json: string): Record<string, string> {
     for (const [k, val] of Object.entries(v)) if (typeof val === "string") out[k] = val;
     return out;
   } catch { return {}; }
+}
+
+/** Telegram allows max 10 poll options; trim strings, drop empties, cap at 10. */
+function parsePollOptions(json: string | null): string[] {
+  if (!json) return [];
+  try {
+    const v = JSON.parse(json);
+    if (!Array.isArray(v)) return [];
+    return v.map((x) => String(x).trim().slice(0, 100)).filter(Boolean).slice(0, 10);
+  } catch { return []; }
+}
+
+interface QuizPollShape { question: string; options: string[]; correctIndex: number }
+
+/**
+ * Daily quiz follow-up (plan §Poll or quiz follow-ups): reuses the existing Quiz
+ * model rather than a new table. Newest active quiz matching the episode category
+ * wins; falls back to any newest active quiz. Returns null when no usable quiz
+ * exists — the scheduler then sends nothing (never fabricates questions).
+ * Telegram quiz polls need 2–10 options and exactly one correct answer.
+ */
+export async function buildDailyQuizPoll(category: string): Promise<QuizPollShape | null> {
+  const quizzes = await db.quiz.findMany({
+    where: { active: true },
+    orderBy: { createdAt: "desc" },
+    take: 12,
+    include: { questions: { orderBy: { position: "asc" }, take: 1, include: { options: { orderBy: { position: "asc" } } } } },
+  });
+  const pick = quizzes.find((q) => q.category === category) ?? quizzes[0];
+  const question = pick?.questions[0];
+  if (!question) return null;
+  const options = question.options.map((o) => o.text.trim().slice(0, 100)).filter(Boolean).slice(0, 10);
+  if (options.length < 2) return null;
+  // Recompute the correct index AFTER trimming/capping so it can't dangle past the end.
+  const originalIndexes = question.options
+    .map((o, i) => ({ text: o.text.trim().slice(0, 100), isCorrect: o.isCorrect, i }))
+    .filter((o) => o.text)
+    .slice(0, 10);
+  const correctPos = originalIndexes.findIndex((o) => o.isCorrect);
+  if (correctPos < 0) return null; // Telegram quiz mode REQUIRES a correct answer; skip if none.
+  return { question: question.question.slice(0, 300), options, correctIndex: correctPos };
 }
 
 /** Interval wiring, mirroring how event-reminders is started in index.ts. */
