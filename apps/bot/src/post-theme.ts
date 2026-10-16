@@ -460,6 +460,13 @@ export function seriesChipLine(key: string | null | undefined, category: string,
 export const VOICE_RULES = {
   /** Titles must be under this many characters (both scripts counted equally). */
   maxTitleChars: 60,
+  /**
+   * Phase 3 expandable quotes: bodies longer than this stay SHORT in the feed —
+   * roughly this many characters of body remain visible and the remainder threads
+   * as "continued below ↓" replies so readers choose to expand. The single source
+   * of truth for the split point; the publisher reads it, nothing hardcodes it.
+   */
+  feedVisibleBodyChars: 700,
   /** Exactly one call-to-action per post. */
   maxCallsToAction: 1,
   /** Paragraphs hold one idea each — enforced as max sentences per paragraph. */
