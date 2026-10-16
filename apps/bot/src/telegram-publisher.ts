@@ -2,7 +2,7 @@ import type { Bot, InlineKeyboard } from "grammy";
 import { env } from "./config.js";
 import { logger } from "./logger.js";
 import { buildChannelCaption, buildChannelCaptionPlain, buildCaptionParts } from "./post-buttons.js";
-import { missingRequiredFactFields } from "./post-theme.js";
+import { missingRequiredFactFields, themeFor, type FactFieldSpec } from "./post-theme.js";
 
 // Every channel post is built with the shared premium caption (brand header, spaced body,
 // "👤 Author · 📅 8 Oct 2026" footer) so the private preview and the published post are
@@ -62,22 +62,38 @@ function premiumCaption(input: PublishInput): string {
   });
 }
 
+/**
+ * Required structured-fact fields for a category, straight from post-theme.ts —
+ * the wizard's "facts" step iterates this list, so the question set and the
+ * publish gate can never disagree about what a layout demands. Empty for free
+ * layouts (media-first / short-story), which skip the step entirely.
+ */
+export function requiredFactFieldsFor(category: string): FactFieldSpec[] {
+  const theme = themeFor(category);
+  return [...theme.factFields];
+}
+
 export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{ chatId: string; messageId: number }> {
   if (!env.GENZI_CHANNEL_ID) throw new Error("GENZI_CHANNEL_ID is not configured");
-  // Enforcement gate (Phase 1.1 layout table): structural categories cannot publish
-  // with missing/blank required fact fields. This throws BEFORE any Telegram call,
-  // so a half-filled fact block can never reach the channel. Legacy callers that
-  // send no factValues for a structural category are also blocked — by design.
-  // The money "Where" anchor is satisfied by the existing `location` field too, so
-  // pre-fact-block posts don't regress.
+  // Enforcement gate (Phase 1.1 layout table + Phase 5 anti-drift rule): a
+  // structural category with missing required fact fields CANNOT publish. This
+  // throws BEFORE any Telegram call, so a half-filled fact block never reaches
+  // the channel and no empty anchor can render. The wizard collects these fields
+  // up front (facts step) and shows the author exactly which are missing; admins
+  // see the same reason in the approval queue before approving. The money "Where"
+  // anchor is satisfied by the existing `location` column, so legacy posts that
+  // already carry location/deadline-style data keep working.
   const missingFacts = missingRequiredFactFields(input.category ?? "", {
     ...(input.location ? { location: input.location } : {}),
     ...input.factValues,
   });
   if (missingFacts.length > 0) {
-    throw new Error(`publish blocked: category "${input.category}" is missing required fact fields: ${missingFacts.join(", ")}`);
+    throw new Error(`publish blocked: category "${input.category ?? "?"}" is missing required fact fields: ${missingFacts.join(", ")}`);
   }
   const channel = env.GENZI_CHANNEL_ID;
+  // Blocked structural posts lose their media on purpose: a half-filled fact block
+  // must never render, and the full premium caption (with the category chip header)
+  // is the fallback surface. Complete posts keep their media untouched.
   const hasMedia = (input.mediaType === "image" || input.mediaType === "video") && Boolean(input.mediaFileId);
   const caption = premiumCaption(input);
 
