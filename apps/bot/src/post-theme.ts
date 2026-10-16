@@ -380,6 +380,78 @@ export const ACCENT_TREATMENTS = {
 } as const;
 
 // ----------------------------------------------------------------------------
+// 8b. Series registry (Phase 3 — series visual spec)
+// ----------------------------------------------------------------------------
+// Recurring formats ("Monday Money Moves", "Friday Fresh Drops") must be
+// recognizable at a glance WITHOUT reading the caption: consistent series chip,
+// consistent accent, fixed day. The registry is the single source of truth for
+// that triple, and it lives here so nothing outside post-theme.ts hardcodes a
+// series color or name. A series borrows its accent from its home category —
+// the same gold as 💰 MONEY, the same purple as 🎵 MUSIC — so the channel's
+// color discipline holds across one-off posts and recurring ones alike.
+
+export type Weekday = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
+
+export interface SeriesSpec {
+  /** Stable id used in data (Post.seriesKey) and deep links. */
+  key: string;
+  /** Fixed display name — never reworded per episode. */
+  name: string;
+  /** Consistent series chip shown alongside the category chip. */
+  chip: string;
+  /** Home category — drives the accent color via themeFor(series.category). */
+  category: CategoryKey;
+  /** Fixed weekday the series publishes on (scheduling contract, Phase 4). */
+  day: Weekday;
+}
+
+/**
+ * First two flagship series. Adding a third later means adding one entry here
+ * plus one row in the scheduler config — no other file changes (open/closed).
+ */
+export const SERIES: Readonly<Record<string, SeriesSpec>> = {
+  "monday-money-moves": {
+    key: "monday-money-moves",
+    name: "Monday Money Moves",
+    chip: "💸 MONDAY MONEY MOVES",
+    category: "money",
+    day: "mon",
+  },
+  "friday-fresh-drops": {
+    key: "friday-fresh-drops",
+    name: "Friday Fresh Drops",
+    chip: "🍭 FRIDAY FRESH DROPS",
+    category: "music",
+    day: "fri",
+  },
+} as const;
+
+const WEEKDAYS: readonly Weekday[] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+
+/** Looks up a series by key. Unknown/missing → null (series rows are optional). */
+export function seriesFor(key?: string | null): SeriesSpec | null {
+  if (!key) return null;
+  return SERIES[key] ?? null;
+}
+
+/** True when `date` (UTC) falls on the series' fixed day. */
+export function isSeriesDay(spec: SeriesSpec, date: Date): boolean {
+  return WEEKDAYS[date.getUTCDay() === 0 ? 6 : date.getUTCDay() - 1] === spec.day;
+}
+
+/**
+ * Caption chip line for a series episode: brand + series chip instead of the
+ * plain category chip, e.g. "🇪🇹 GENZI · 💸 MONDAY MONEY MOVES". Falls back to
+ * the ordinary category chip line when the key is unknown, so a stale series
+ * value can never render an empty anchor (same graceful rule as fact blocks).
+ */
+export function seriesChipLine(key: string | null | undefined, category: string, locale: "en" | "am"): string {
+  const spec = seriesFor(key);
+  if (!spec) return brandChipLine(category, locale);
+  return `${BRAND.mark} · ${spec.chip}`;
+}
+
+// ----------------------------------------------------------------------------
 // 9. Brand voice rules (machine-checkable constants)
 // ----------------------------------------------------------------------------
 // These are RULES, not suggestions. The wizard (Phase 5 schema validation)

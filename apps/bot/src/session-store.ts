@@ -120,3 +120,11 @@ export async function setPreferCard(telegramUserId: number, preferCard: boolean)
     data: { preferCard },
   });
 }
+
+// Phase 3 (caption position): the author's "caption above media" toggle lives on the
+// Submission row (not the session) because it must survive session expiry and reach
+// publishToChannel + the Post row. Same upsert-safety note as setPreferCard:
+// setSession never touches this column.
+export async function setCaptionAbove(submissionId: string, captionAbove: boolean): Promise<void> {
+  await db.submission.update({ where: { id: submissionId }, data: { captionAbove } });
+}

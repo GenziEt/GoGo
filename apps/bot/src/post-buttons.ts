@@ -187,6 +187,11 @@ export interface CaptionInput {
   // title and the body. Empty/missing anchors are dropped by factBlockEntries — a half-filled
   // block can never render a broken row.
   factValues?: Record<string, string | undefined>;
+  // Phase 3 series visual spec: key into post-theme.ts SERIES. A series episode shows
+  // its fixed chip ("🇪🇹 GENZI · 💸 MONDAY MONEY MOVES") instead of the plain category
+  // chip, so recurring formats are recognizable at a glance without reading the caption.
+  // Unknown/null keys fall back to the ordinary category chip — never an empty anchor.
+  seriesKey?: string | null;
   escapeHtml: (value: string) => string;
 }
 
