@@ -23,6 +23,7 @@ import { logger } from "./logger.js";
 import { createTelegramNotifier } from "./notifications.js";
 import { setEventReminder, cancelEventReminder, startReminderSweeper } from "./event-reminders.js";
 import { startSeriesScheduler } from "./series-scheduler.js";
+import { startPinnedWelcomeLoop } from "./pinned-welcome.js";
 
 const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
 const notifier = createTelegramNotifier(bot);
@@ -707,6 +708,11 @@ startReminderSweeper(notifier);
 // Phase 4 series scheduler: same sweeper pattern as event-reminders.ts — publishes due
 // scheduled series episodes on their fixed day and queues their poll follow-ups.
 startSeriesScheduler(bot);
+
+// Phase 4 pinned welcome (plan §Pinned post): keeps exactly one pinned bilingual
+// welcome message with the three main buttons up to date on the channel. Best-effort:
+// never throws, never blocks anything else (same contract as the card renderer).
+startPinnedWelcomeLoop(bot);
 
 function hidePaidPostBody<T extends { monetizationType: string; priceCoins: number; authorId: string }>(post: T, viewerId: string | null, viewerRole: string | null): T {
   if (post.monetizationType !== "PAID") return post;

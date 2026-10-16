@@ -155,7 +155,9 @@ export async function dispatchDueSeriesEpisodes(bot: Bot): Promise<number> {
         if (quizPoll) {
           await bot.api.sendPoll(result.chatId, quizPoll.question, quizPoll.options, {
             type: "quiz",
-            correct_option_id: quizPoll.correctIndex,
+            // grammY/Bot-API shape: correct_option_ids is an array of indices (plural),
+            // even for a single right answer in quiz mode.
+            correct_option_ids: [quizPoll.correctIndex],
             is_anonymous: true,
             reply_parameters: { message_id: result.messageId },
           });
