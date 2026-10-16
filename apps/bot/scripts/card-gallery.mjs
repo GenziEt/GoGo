@@ -20,7 +20,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { CATEGORY_THEMES } from "../src/post-theme.js";
+import { CATEGORY_THEMES, SERIES } from "../src/post-theme.js";
 import { renderCard, clampTitle } from "../src/card-renderer.js";
 
 const outDir = process.argv[2] ?? path.resolve(".card-cache", "gallery");
@@ -152,6 +152,32 @@ for (const [key, theme] of Object.entries(CATEGORY_THEMES)) {
   );
 }
 
+// --- Phase 3 series visual spec: the two flagship series cards --------------
+// (SERIES imported at top; accent comes from the home category theme.)
+// A series episode swaps the category chip for its fixed series chip; the
+// accent still comes from the home category's theme. Reviewed in this same
+// contact sheet so the monthly gallery pass (§5) covers series too.
+for (const [sKey, spec] of Object.entries(SERIES)) {
+  const sample = SAMPLES[spec.category];
+  const sEn = await renderCard({
+    slug: `gallery-series-${sKey}`,
+    title: clampTitle(sample.titleEn),
+    category: spec.category,
+    locale: "en",
+    factValues: sample.factValues,
+    subtitle: sample.subtitle,
+    seriesKey: sKey,
+  });
+  if (!sEn || sEn.png.length < 10_000) {
+    console.error(`✗ series "${sKey}" card failed to render`);
+    failures++;
+    continue;
+  }
+  const sFile = write(`series-${sKey}.png`, sEn.png);
+  rows.push({ key: `series:${sKey}`, theme: CATEGORY_THEMES[spec.category], enFile: sFile, amFile: sFile, enMs: 0, amMs: 0, seriesChip: spec.chip });
+  console.log(`✓ 🔁 series ${sKey.padEnd(20)} chip="${spec.chip}" day=${spec.day} (accent from ${spec.category})`);
+}
+
 // --- Warm-cache check: second render of same slug must be instant (§2.6) ----
 let warmOk = true;
 if (rows.length > 0) {
@@ -184,19 +210,22 @@ one dominant accent per category, identical footer, category chip up top.</p>
 <div class="grid">
 ${rows
   .map(
-    (r) =>
-      `<div class="cell"><img src="${path.basename(r.enFile)}"><span>${r.theme.emoji} ${r.key} · EN · ${r.theme.dominantAccent}</span></div>` +
-      `<div class="cell"><img src="${path.basename(r.amFile)}"><span>${r.theme.emoji} ${r.key} · AM</span></div>`,
+    (r) => r.seriesChip
+      ? `<div class="cell"><img src="${path.basename(r.enFile)}"><span>🔁 ${r.key} · ${r.seriesChip}</span></div>`
+      : `<div class="cell"><img src="${path.basename(r.enFile)}"><span>${r.theme.emoji} ${r.key} · EN · ${r.theme.dominantAccent}</span></div>` +
+        `<div class="cell"><img src="${path.basename(r.amFile)}"><span>${r.theme.emoji} ${r.key} · AM</span></div>`,
   )
   .join("\n")}
 </div></body></html>\n`;
 fs.writeFileSync(path.join(outDir, "gallery.html"), html);
 
 console.log(`\nContact sheet: ${path.join(outDir, "gallery.html")}`);
-console.log(`Categories rendered: ${rows.length}/9 · failures: ${failures} · warm cache: ${warmOk ? "OK" : "FAIL"}`);
+const categoryRows = rows.filter((r) => !r.seriesChip);
+const seriesRows = rows.filter((r) => r.seriesChip);
+console.log(`Categories rendered: ${categoryRows.length}/9 · series cards: ${seriesRows.length}/${Object.keys(SERIES).length} · failures: ${failures} · warm cache: ${warmOk ? "OK" : "FAIL"}`);
 
-if (rows.length !== 9 || failures > 0 || !warmOk) {
+if (categoryRows.length !== 9 || seriesRows.length !== Object.keys(SERIES).length || failures > 0 || !warmOk) {
   console.error("\n✗ GALLERY ACCEPTANCE FAILED");
   process.exit(1);
 }
-console.log("\n✅ Gallery acceptance passed: nine categories, EN+AM, one brand as a set.");
+console.log("\n✅ Gallery acceptance passed: nine categories + all series, EN+AM, one brand as a set.");
