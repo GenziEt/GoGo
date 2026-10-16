@@ -336,12 +336,18 @@ model FeedEvent {
   userId    String
   postId    String
   event     String
+  // Phase 4 tracked links: attribution source for VIEW events. "c" = opened from the
+  // channel Read More button, "s" = arrived via a shared link, "direct" = everything
+  // else (in-app browsing, untracked/preview links). Answers "which posts drove the
+  // most Mini App opens this week?" from our own database — no analytics service.
+  source    String   @default("direct")
   createdAt DateTime @default(now())
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
   @@index([postId, event])
+  @@index([event, source, createdAt])
 }
 
 model Community {

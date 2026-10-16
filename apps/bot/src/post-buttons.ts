@@ -288,6 +288,12 @@ export interface PostButtonContext {
   linkUrl?: string | null;
   linkPlatform?: string | null;
   locale?: Locale;
+  // Phase 4 (plan §Mini App tracked links): attribution source appended to the
+  // Read More deep link as `post_<slug>_c` and baked into the Share sheet URL as
+  // `post_<slug>_s`. Callers that publish through the channel should pass "channel"
+  // (default); preview-only callers that must NOT pollute weekly open stats with
+  // author/approver self-opens pass "preview".
+  buttonSource?: "channel" | "preview";
 }
 
 // All buttons are URL-type — no callback spinning loaders on channel posts.
@@ -311,6 +317,10 @@ export function buildChannelButtons(ctx: PostButtonContext): InlineKeyboard | nu
   // Row 2 (constant): Read More + Share, paired. Each degrades gracefully.
   // Buttons are appended to the current row via kb.text(); kb.row() then flushes it.
   // Never pass a nested InlineKeyboard to kb.row() — the API expects buttons, not keyboards.
+  // Phase 4 tracked links: `_c` suffix marks channel-origin opens, `_s` marks
+  // share-origin opens. Preview keyboards use an UNTRACKED link so author/approver
+  // self-opens never pollute the weekly channel→Mini App attribution.
+  const tracked = ctx.buttonSource !== "preview";
   let pairCount = 0;
   if (env.TELEGRAM_BOT_USERNAME) {
     // URL button (NOT .text(): that makes a callback button whose callback_data is capped at
@@ -318,7 +328,7 @@ export function buildChannelButtons(ctx: PostButtonContext): InlineKeyboard | nu
     // t.me deep link opens the Mini App inside Telegram so initData is present.
     kb.url(
       locale === "am" ? "📖 ሙሉውን ያንብቡ" : "📖 Read More",
-      miniAppDeepLink(ctx.slug),
+      tracked ? trackedMiniAppLink(ctx.slug, "c") : miniAppDeepLink(ctx.slug),
     );
     // The Mini App launch button is the constant on every post — always brand-coloured.
     withButtonStyle(kb, BRAND_BUTTON_STYLE);
@@ -329,10 +339,14 @@ export function buildChannelButtons(ctx: PostButtonContext): InlineKeyboard | nu
   if (env.GENZI_CHANNEL_USERNAME) {
     // Prefer the real message link (opens Telegram's native share sheet for that exact post);
     // fall back to sharing the Mini App deep link until the message id is known.
+    // Tracked shares carry `?g=post_<slug>_s` so recipients' Mini App opens attribute back
+    // to this post's share path in our own database (no analytics service).
     const postUrl =
       ctx.messageId !== null
-        ? `https://t.me/${env.GENZI_CHANNEL_USERNAME}/${ctx.messageId}`
-        : miniAppDeepLink(ctx.slug);
+        ? `https://t.me/${env.GENZI_CHANNEL_USERNAME}/${ctx.messageId}${tracked ? "?g=" + encodeURIComponent(trackedMiniAppLink(ctx.slug, "s")) : ""}`
+        : tracked
+          ? trackedMiniAppLink(ctx.slug, "s")
+          : miniAppDeepLink(ctx.slug);
     kb.url(locale === "am" ? "🔗 ያጋሩ" : "🔗 Share", shareUrl(postUrl));
     pairCount++;
   }
@@ -354,6 +368,14 @@ export function buildChannelButtons(ctx: PostButtonContext): InlineKeyboard | nu
 // Needs the Mini App set as the bot's Main App in BotFather (or swap in t.me/<bot>/<appname>).
 function miniAppDeepLink(slug: string): string {
   return `https://t.me/${env.TELEGRAM_BOT_USERNAME}?startapp=post_${encodeURIComponent(slug)}`;
+}
+
+// Phase 4 (plan §Mini App tracked links): same deep link, but the start_param carries a
+// source suffix — post_<slug>_c for channel buttons, post_<slug>_s for share paths.
+// The web app records the suffix on its existing /api/posts/:id/view event, so "which
+// posts drove the most Mini App opens this week?" is answerable from our own database.
+export function trackedMiniAppLink(slug: string, source: "c" | "s"): string {
+  return `https://t.me/${env.TELEGRAM_BOT_USERNAME}?startapp=post_${encodeURIComponent(slug)}_${source}`;
 }
 
 // Telegram's native share sheet, pre-filled with short brand copy (BRAND.mark from post-theme.ts).

@@ -329,6 +329,9 @@ async function sendPreview(
     linkUrl: ctxInfo.linkUrl ?? null,
     linkPlatform: ctxInfo.linkPlatform ?? null,
     locale,
+    // Phase 4: previews use UNTRACKED deep links so opening your own preview never
+    // counts toward the post's weekly channel-open attribution.
+    buttonSource: "preview",
   });
   // Approve is green (success) and Cancel red (danger) — Bot API 9.4 button styles (private chat only).
   const actionKeyboard = channelButtons
@@ -764,6 +767,8 @@ export function registerPostFlow(bot: Bot): void {
       linkUrl,
       linkPlatform,
       locale,
+      // Phase 4: published channel buttons carry the tracked _c source suffix.
+      buttonSource: "channel",
     });
     await db.submission.update({ where: { id: submissionId }, data: { state: "PUBLISHED" } });
     await clearSession(ctx.from.id);

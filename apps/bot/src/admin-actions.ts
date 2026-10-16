@@ -95,7 +95,9 @@ export async function performModerationAction(bot: Bot, submissionId: string, mo
           messageId: publication.messageId,
           chatId: publication.chatId,
           linkUrl: post.linkUrl,
-          linkPlatform: post.linkPlatform
+          linkPlatform: post.linkPlatform,
+          // Phase 4: published channel buttons carry the tracked _c source suffix.
+          buttonSource: "channel"
         });
       } else {
         const locked = lockPost(normalized, authorName);
@@ -149,7 +151,9 @@ export async function performModerationAction(bot: Bot, submissionId: string, mo
           messageId: publication.messageId,
           chatId: publication.chatId,
           linkUrl,
-          linkPlatform
+          linkPlatform,
+          // Phase 4: published channel buttons carry the tracked _c source suffix.
+          buttonSource: "channel"
         });
       }
       await db.submission.update({ where: { id: submissionId }, data: { state: "PUBLISHED" } });
