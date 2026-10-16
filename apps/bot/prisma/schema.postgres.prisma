@@ -187,6 +187,11 @@ model Submission {
   // there the text IS the product; free layouts default to false. Persisted so the
   // choice survives session expiry and reaches publishToChannel.
   captionAbove   Boolean?
+  // Phase 3 (series visual spec): the recurring-format key chosen in the wizard
+  // (SERIES registry in post-theme.ts, e.g. "monday-money-moves"). Null = ordinary
+  // one-off post. Persisted on the Submission so it survives session expiry and
+  // reaches publishToChannel + the Post row like captionAbove does.
+  seriesKey      String?
   normalizedJson String?
   previewJson    String?
   moderationJson String?

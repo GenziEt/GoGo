@@ -1,6 +1,7 @@
 import { db } from "./db.js";
 import type { Locale } from "./i18n.js";
 import type { Locale as PrismaLocale } from "@prisma/client";
+import { seriesFor } from "./post-theme.js";
 
 export type Step = "title" | "body" | "media" | "link" | "category" | "facts" | `fact:${string}:${string}` | "preview";
 // Wizard steps that accept free TEXT input (everything except the preview).
@@ -127,4 +128,24 @@ export async function setPreferCard(telegramUserId: number, preferCard: boolean)
 // setSession never touches this column.
 export async function setCaptionAbove(submissionId: string, captionAbove: boolean): Promise<void> {
   await db.submission.update({ where: { id: submissionId }, data: { captionAbove } });
+}
+
+/**
+ * Read the stored caption-above preference for a submission. Returns false when the
+ * column is null (legacy rows / untouched default) so callers get a plain boolean.
+ */
+export async function peekCaptionAbove(submissionId: string): Promise<boolean> {
+  const row = await db.submission.findUnique({ where: { id: submissionId }, select: { captionAbove: true } });
+  return row?.captionAbove === true;
+}
+
+/**
+ * Persist the chosen series key on the Submission so it survives session expiry and
+ * reaches publishToChannel + the Post row (same storage rationale as captionAbove).
+ * Pass null to clear the choice back to an ordinary one-off post. Unknown keys are
+ * rejected here — the chip fallback in seriesChipLine is the second layer of defense.
+ */
+export async function setSeriesKey(submissionId: string, seriesKey: string | null): Promise<void> {
+  if (seriesKey !== null && !seriesFor(seriesKey)) throw new Error(`Unknown series key: ${seriesKey}`);
+  await db.submission.update({ where: { id: submissionId }, data: { seriesKey } });
 }
