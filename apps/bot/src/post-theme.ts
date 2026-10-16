@@ -457,6 +457,14 @@ export function seriesChipLine(key: string | null | undefined, category: string,
 // These are RULES, not suggestions. The wizard (Phase 5 schema validation)
 // imports them and refuses to publish violating posts.
 
+/**
+ * Phase 4 (plan §Reactions): the branded reaction set the bot seeds on every
+ * channel post via setMessageReaction. Telegram's allowed-emoji list is fixed;
+ * these five are all in it and chosen to match the GENZI audience. Single
+ * source of truth — the publisher reads this, nothing hardcodes emoji elsewhere.
+ */
+export const CHANNEL_REACTIONS = ["🔥", "❤️", "👏", "😂", "🤯"] as const;
+
 export const VOICE_RULES = {
   /** Titles must be under this many characters (both scripts counted equally). */
   maxTitleChars: 60,
