@@ -2,7 +2,7 @@ import type { Bot, InlineKeyboard } from "grammy";
 import { env } from "./config.js";
 import { logger } from "./logger.js";
 import { buildChannelCaption, buildChannelCaptionPlain, buildCaptionParts } from "./post-buttons.js";
-import { missingRequiredFactFields, themeFor, type FactFieldSpec } from "./post-theme.js";
+import { missingFactFieldsAfterDefaults, themeFor, type FactFieldSpec } from "./post-theme.js";
 
 // Every channel post is built with the shared premium caption (brand header, spaced body,
 // "👤 Author · 📅 8 Oct 2026" footer) so the private preview and the published post are
@@ -24,6 +24,9 @@ type PublishInput = {
   // Structural categories (money / events / ai-tech) cannot publish while a required
   // field is missing or blank — enforced below, never at render time.
   factValues?: Record<string, string | undefined>;
+  // The post's own platform link. Feeds factDefaults (link → How/Tickets/Source
+  // anchors) so the gate matches the wizard's question set exactly.
+  linkUrl?: string | null;
 };
 
 // Telegram hard limits: 4096 chars per text message, 1024 per media caption. The post wizard
@@ -82,11 +85,17 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
   // up front (facts step) and shows the author exactly which are missing; admins
   // see the same reason in the approval queue before approving. The money "Where"
   // anchor is satisfied by the existing `location` column, so legacy posts that
-  // already carry location/deadline-style data keep working.
-  const missingFacts = missingRequiredFactFields(input.category ?? "", {
-    ...(input.location ? { location: input.location } : {}),
-    ...input.factValues,
-  });
+  // already carry location/deadline-style data keep working. Sensible defaults
+  // (link → How/Tickets/Source anchors) come from post-theme.ts factDefaults,
+  // so this gate and the wizard's question set are the SAME computation.
+  const missingFacts = missingFactFieldsAfterDefaults(
+    input.category ?? "",
+    {
+      ...(input.location ? { location: input.location } : {}),
+      ...input.factValues,
+    },
+    { linkUrl: input.linkUrl ?? null },
+  );
   if (missingFacts.length > 0) {
     throw new Error(`publish blocked: category "${input.category ?? "?"}" is missing required fact fields: ${missingFacts.join(", ")}`);
   }

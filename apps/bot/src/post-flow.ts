@@ -9,8 +9,9 @@ import { categoryKeyboard, previewKeyboard } from "./ui.js";
 import { categories } from "./categories.js";
 import { t, type Locale } from "./i18n.js";
 import { getSession, setSession, clearSession, abandonOpenWork } from "./session-store.js";
-import { publishToChannel, deleteChannelMessage } from "./telegram-publisher.js";
+import { publishToChannel, deleteChannelMessage, requiredFactFieldsFor } from "./telegram-publisher.js";
 import { buildChannelCaption, buildChannelButtons, parsePlatformLink, attachChannelButtons, withButtonStyle } from "./post-buttons.js";
+import { isStructuralLayout, themeFor, factDefaults, missingFactFieldsAfterDefaults, type FactFieldSpec } from "./post-theme.js";
 import { logger } from "./logger.js";
 
 /**
@@ -31,6 +32,146 @@ function escapeHtml(value: string): string {
 function extractTags(body: string): string[] {
   const found = body.match(/#[\p{L}\p{N}_]{2,30}/gu) ?? [];
   return [...new Set(found.map((x) => x.slice(1)))].slice(0, 8);
+}
+
+// --- Structured fact-block wizard steps (Phase 1.1 / Phase 5 enforcement) --------------
+// Structural categories (money / events / ai-tech) collect their fact fields as explicit
+// wizard answers instead of free-typed captions. The required-field set and the sensible
+// defaults both come from post-theme.ts, so the questions asked here and the publish gate
+// in telegram-publisher.ts can never disagree.
+
+type FactValues = Record<string, string>;
+
+function parseFacts(raw: string | null | undefined): FactValues {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const out: FactValues = {};
+      for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+        if (typeof v === "string") out[k] = v;
+      }
+      return out;
+    }
+  } catch {
+    /* corrupted factsJson is treated as empty — the gate will simply re-ask */
+  }
+  return {};
+}
+
+function labelForField(field: FactFieldSpec, locale: Locale): string {
+  return locale === "am" ? field.labelAm : field.labelEn;
+}
+
+/** Effective values = theme defaults (author's link fills How/Tickets/Source) + author answers. */
+function effectiveFacts(category: string, submission: { factsJson: string | null; linkUrl: string | null }): FactValues {
+  return { ...factDefaults(category, { linkUrl: submission.linkUrl }), ...parseFacts(submission.factsJson) };
+}
+
+/**
+ * Render the "facts" review screen: one row per required field showing its current
+ * value (or a Missing marker), plus a Done button that is enabled only when every
+ * required field is filled. Tapping a field row opens its "fact:<key>" input sub-step.
+ */
+async function sendFactsReview(ctx: Context, category: string, submissionId: string, locale: Locale): Promise<void> {
+  const submission = await db.submission.findUniqueOrThrow({ where: { id: submissionId } });
+  const theme = themeFor(category);
+  const fields = requiredFactFieldsFor(category);
+  const merged = effectiveFacts(category, submission);
+  const keyboard = new InlineKeyboard();
+  for (const field of fields) {
+    const value = merged[field.key]?.trim();
+    const status = value ? `${t(locale, "factFilled")} · ${value.slice(0, 40)}` : t(locale, "factMissing");
+    keyboard.text(`${field.anchor} ${labelForField(field, locale)}: ${status}`, `factedit:${category}:${field.key}`).row();
+  }
+  const stillMissing = missingFactFieldsAfterDefaults(category, merged, { linkUrl: submission.linkUrl });
+  if (stillMissing.length === 0) keyboard.text(t(locale, "factDone"), `factsdone:${category}`);
+  const lines = fields.map((f) => `${f.anchor} ${labelForField(f, locale)}`).join("\n");
+  await ctx.reply(`${t(locale, "factsIntro")}\n\n${theme.emoji} ${lines}`, { reply_markup: keyboard });
+}
+
+/**
+ * Moderate + persist one fact answer, then return to the facts review screen.
+ * Shared by the "fact:<key>" text-input step and the /skip command on that step.
+ */
+async function saveFactAnswer(
+  ctx: Context,
+  user: Awaited<ReturnType<typeof getUser>>,
+  submissionId: string,
+  category: string,
+  key: string,
+  value: string | null,
+  locale: Locale,
+): Promise<void> {
+  const staff = user.role !== "USER";
+  if (value !== null) {
+    const check = moderateText(value, { isAdmin: staff, isForwarded: false });
+    if (check.decision === "BAN" || check.decision === "REJECT") {
+      await moderateAndEnforce(user.id, staff, [value]);
+      await ctx.reply(check.category === "LINK" ? t(locale, "linkDenied") : t(locale, "rejected"));
+      return;
+    }
+  }
+  const submission = await db.submission.findUnique({ where: { id: submissionId } });
+  const facts = parseFacts(submission?.factsJson);
+  if (value === null) delete facts[key];
+  else facts[key] = value.trim();
+  await db.submission.update({ where: { id: submissionId }, data: { factsJson: JSON.stringify(facts) } });
+  await setSession(ctx.from!.id, submissionId, "facts", locale);
+  await sendFactsReview(ctx, category, submissionId, locale);
+}
+
+/**
+ * The single finalize path for a wizard post: normalize → moderate → either reject,
+ * quarantine, or move to PREVIEW and show it. Structural categories reach here only
+ * after their fact fields are complete (the facts step gates them); legacy callers
+ * arrive directly from the category step.
+ */
+async function finalizeToPreview(
+  ctx: Context,
+  user: Awaited<ReturnType<typeof getUser>>,
+  submission: { id: string; title: string; body: string; linkUrl: string | null; linkPlatform: string | null; mediaType: string | null; mediaFileId: string | null; factsJson: string | null },
+  categoryKey: string,
+  locale: Locale,
+): Promise<void> {
+  const facts = effectiveFacts(categoryKey, submission);
+  const normalized = normalizePost({
+    title: submission.title,
+    body: submission.body,
+    category: categoryKey,
+    tags: extractTags(submission.body),
+    ...(facts.location ? { location: facts.location } : {}),
+    ...(submission.linkUrl ? { link: submission.linkUrl } : {}),
+    ...(submission.linkPlatform ? { linkPlatform: submission.linkPlatform } : {}),
+    ...(submission.mediaType ? { mediaType: submission.mediaType } : {}),
+    ...(submission.mediaFileId ? { mediaFileId: submission.mediaFileId } : {}),
+  });
+  // One consolidated check on the final text; this also logs the event / applies ban or restriction.
+  const moderation = await moderateAndEnforce(user.id, user.role !== "USER", [normalized.title, normalized.body]);
+  const common = { category: categoryKey, normalizedJson: JSON.stringify(normalized), moderationJson: JSON.stringify(moderation) };
+
+  if (moderation.decision === "BAN" || moderation.decision === "REJECT") {
+    await db.submission.update({ where: { id: submission.id }, data: { ...common, state: "REJECTED" } });
+    await clearSession(ctx.from!.id);
+    await ctx.reply(moderation.category === "LINK" ? t(locale, "linkDenied") : t(locale, "rejected"));
+    return;
+  }
+  if (moderation.decision === "QUARANTINE") {
+    // Goes to the moderator queue; the user is told so (previously they were shown an Approve
+    // button that answered "Not ready." with no explanation).
+    await db.submission.update({ where: { id: submission.id }, data: { ...common, state: "QUARANTINED" } });
+    await clearSession(ctx.from!.id);
+    await ctx.reply(t(locale, "quarantined"));
+    return;
+  }
+  await db.submission.update({ where: { id: submission.id }, data: { ...common, state: "PREVIEW" } });
+  await setSession(ctx.from!.id, submission.id, "preview", locale);
+  await sendPreview(ctx, normalized, locale, {
+    slug: normalized.slug,
+    author: user.firstName ?? "GENZI",
+    linkUrl: submission.linkUrl,
+    linkPlatform: submission.linkPlatform,
+  });
 }
 
 export async function getUser(ctx: Context) {
@@ -221,42 +362,66 @@ export function registerPostFlow(bot: Bot): void {
     }
     await ctx.answerCallbackQuery();
 
-    const normalized = normalizePost({
-      title: submission.title,
-      body: submission.body,
-      category: key,
-      tags: extractTags(submission.body),
-      ...(submission.linkUrl ? { link: submission.linkUrl } : {}),
-      ...(submission.linkPlatform ? { linkPlatform: submission.linkPlatform } : {}),
-      ...(submission.mediaType ? { mediaType: submission.mediaType } : {}),
-      ...(submission.mediaFileId ? { mediaFileId: submission.mediaFileId } : {}),
-    });
-    // One consolidated check on the final text; this also logs the event / applies ban or restriction.
-    const moderation = await moderateAndEnforce(user.id, user.role !== "USER", [normalized.title, normalized.body]);
-    const common = { category: key, normalizedJson: JSON.stringify(normalized), moderationJson: JSON.stringify(moderation) };
+    // Structural categories (money / events / ai-tech) go through the facts step BEFORE the
+    // preview — authors fill fields instead of free-typing, and a half-filled block can never
+    // reach publish. Free-layout categories finalize straight away.
+    if (isStructuralLayout(themeFor(key).layout)) {
+      await db.submission.update({ where: { id: submission.id }, data: { category: key } });
+      await setSession(ctx.from.id, submission.id, "facts", locale);
+      await sendFactsReview(ctx, key, submission.id, locale);
+      return;
+    }
+    await finalizeToPreview(ctx, user, submission, key, locale);
+  });
 
-    if (moderation.decision === "BAN" || moderation.decision === "REJECT") {
-      await db.submission.update({ where: { id: submission.id }, data: { ...common, state: "REJECTED" } });
+  // Facts review screen: tap a field row → collect one answer as text ("fact:<key>" sub-step).
+  bot.callbackQuery(/^factedit:([^:]+):([^:]+)$/, async (ctx) => {
+    if (!ctx.from || !isPrivate(ctx)) return ctx.answerCallbackQuery();
+    const user = await getUser(ctx);
+    const locale = toI18nLocale(user.locale);
+    const session = await getSession(ctx.from.id);
+    const submissionId = session?.submissionId;
+    if (!session || !submissionId || session.step !== "facts")
+      return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+    const [, category, key] = ctx.match as unknown as string[];
+    const field = requiredFactFieldsFor(category!).find((f) => f.key === key);
+    if (!field) return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+    const submission = await db.submission.findUnique({ where: { id: submissionId } });
+    if (!submission || submission.userId !== user.id || submission.state !== "INPUT") {
       await clearSession(ctx.from.id);
-      await ctx.reply(moderation.category === "LINK" ? t(locale, "linkDenied") : t(locale, "rejected"));
+      return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+    }
+    await ctx.answerCallbackQuery();
+    await setSession(ctx.from.id, submissionId, `fact:${key}`, locale);
+    const current = effectiveFacts(category!, submission)[key!]?.trim();
+    await ctx.reply(
+      `${field.anchor} ${labelForField(field, locale)}${current ? `\n(${current.slice(0, 120)})` : ""}\n\n/send /skip to clear`,
+    );
+  });
+
+  // Facts review screen: Done is only rendered when every required field is filled, but a
+  // stale button could still be tapped — re-check against the SAME theme computation here.
+  bot.callbackQuery(/^factsdone:([^:]+)$/, async (ctx) => {
+    if (!ctx.from || !isPrivate(ctx)) return ctx.answerCallbackQuery();
+    const user = await getUser(ctx);
+    const locale = toI18nLocale(user.locale);
+    const session = await getSession(ctx.from.id);
+    const submissionId = session?.submissionId;
+    if (!session || !submissionId || session.step !== "facts")
+      return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+    const category = ctx.match[1]!;
+    const submission = await db.submission.findUnique({ where: { id: submissionId } });
+    if (!submission || submission.userId !== user.id || submission.state !== "INPUT" || !submission.title || !submission.body) {
+      await clearSession(ctx.from.id);
+      return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+    }
+    const missing = missingFactFieldsAfterDefaults(category, effectiveFacts(category, submission), { linkUrl: submission.linkUrl });
+    if (missing.length > 0) {
+      await ctx.answerCallbackQuery(`${t(locale, "factSkipNotice")} ${missing.join(", ")}`);
       return;
     }
-    if (moderation.decision === "QUARANTINE") {
-      // Goes to the moderator queue; the user is told so (previously they were shown an Approve
-      // button that answered "Not ready." with no explanation).
-      await db.submission.update({ where: { id: submission.id }, data: { ...common, state: "QUARANTINED" } });
-      await clearSession(ctx.from.id);
-      await ctx.reply(t(locale, "quarantined"));
-      return;
-    }
-    await db.submission.update({ where: { id: submission.id }, data: { ...common, state: "PREVIEW" } });
-    await setSession(ctx.from.id, submission.id, "preview", locale);
-    await sendPreview(ctx, normalized, locale, {
-      slug: normalized.slug,
-      author: user.firstName ?? "GENZI",
-      linkUrl: submission.linkUrl,
-      linkPlatform: submission.linkPlatform,
-    });
+    await ctx.answerCallbackQuery();
+    await finalizeToPreview(ctx, user, submission, category, locale);
   });
 
   bot.callbackQuery("publish_preview", async (ctx) => {
@@ -300,6 +465,10 @@ export function registerPostFlow(bot: Bot): void {
         ...(locked.metadata.location ? { location: locked.metadata.location } : {}),
         category: locked.metadata.category,
         readingMinutes: locked.metadata.readingMinutes,
+        // Same values the facts step collected — the gate in publishToChannel re-verifies
+        // them against post-theme.ts before anything reaches the channel.
+        factValues: parseFacts(submission.factsJson),
+        linkUrl,
       });
     } catch (error) {
       logger.error("GENZI channel publication failed", { error: String(error) });
@@ -321,6 +490,9 @@ export function registerPostFlow(bot: Bot): void {
           ...(locked.media.aspectRatio !== undefined ? { mediaAspect: locked.media.aspectRatio } : {}),
           ...(locked.metadata.altText !== undefined ? { altText: locked.metadata.altText } : {}),
           ...(locked.metadata.location !== undefined ? { location: locked.metadata.location } : {}),
+          // Persist the structured fact block so re-publishes, admin approvals, and the
+          // Phase 2 card renderer can rebuild it without re-asking the author.
+          factsJson: submission.factsJson,
           linkUrl,
           linkPlatform,
           readingMinutes: locked.metadata.readingMinutes,
