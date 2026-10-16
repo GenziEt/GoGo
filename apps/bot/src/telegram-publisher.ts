@@ -2,6 +2,7 @@ import type { Bot, InlineKeyboard } from "grammy";
 import { env } from "./config.js";
 import { logger } from "./logger.js";
 import { buildChannelCaption, buildChannelCaptionPlain, buildCaptionParts } from "./post-buttons.js";
+import { missingRequiredFactFields } from "./post-theme.js";
 
 // Every channel post is built with the shared premium caption (brand header, spaced body,
 // "👤 Author · 📅 8 Oct 2026" footer) so the private preview and the published post are
@@ -19,6 +20,10 @@ type PublishInput = {
   readingMinutes?: number;
   // Category key drives the header chip (Phase 1). Optional for legacy callers.
   category?: string;
+  // Structured fact-block values keyed by post-theme FactFieldSpec.key (Phase 1.1).
+  // Structural categories (money / events / ai-tech) cannot publish while a required
+  // field is missing or blank — enforced below, never at render time.
+  factValues?: Record<string, string | undefined>;
 };
 
 // Telegram hard limits: 4096 chars per text message, 1024 per media caption. The post wizard
@@ -59,6 +64,19 @@ function premiumCaption(input: PublishInput): string {
 
 export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{ chatId: string; messageId: number }> {
   if (!env.GENZI_CHANNEL_ID) throw new Error("GENZI_CHANNEL_ID is not configured");
+  // Enforcement gate (Phase 1.1 layout table): structural categories cannot publish
+  // with missing/blank required fact fields. This throws BEFORE any Telegram call,
+  // so a half-filled fact block can never reach the channel. Legacy callers that
+  // send no factValues for a structural category are also blocked — by design.
+  // The money "Where" anchor is satisfied by the existing `location` field too, so
+  // pre-fact-block posts don't regress.
+  const missingFacts = missingRequiredFactFields(input.category ?? "", {
+    ...(input.location ? { location: input.location } : {}),
+    ...input.factValues,
+  });
+  if (missingFacts.length > 0) {
+    throw new Error(`publish blocked: category "${input.category}" is missing required fact fields: ${missingFacts.join(", ")}`);
+  }
   const channel = env.GENZI_CHANNEL_ID;
   const hasMedia = (input.mediaType === "image" || input.mediaType === "video") && Boolean(input.mediaFileId);
   const caption = premiumCaption(input);

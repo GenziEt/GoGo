@@ -404,6 +404,28 @@ export function findMixedScriptSentences(text: string, allowlist: readonly strin
   return offenders;
 }
 
+/**
+ * Wizard gate for structural categories (Phase 1.1 layout table). A post in a
+ * fact-block / event-block / tldr-keypoints category may not publish while any
+ * required fact field is missing or blank — this is the rule Phase 5's schema
+ * validation enforces at the wizard; here it lives in the theme so the two can
+ * never disagree about which fields are required. Free layouts (media-first,
+ * short-story) have no required fields and always pass.
+ */
+export function missingRequiredFactFields(
+  category: string,
+  values: Record<string, string | undefined>,
+): string[] {
+  const theme = themeFor(category);
+  if (!isStructuralLayout(theme.layout)) return [];
+  const missing: string[] = [];
+  for (const field of theme.factFields) {
+    const raw = values[field.key];
+    if (raw === undefined || raw.trim() === "") missing.push(field.key);
+  }
+  return missing;
+}
+
 // ----------------------------------------------------------------------------
 // 10. Brand line + helpers
 // ----------------------------------------------------------------------------

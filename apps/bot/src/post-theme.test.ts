@@ -18,6 +18,7 @@ import {
   findMixedScriptSentences,
   hasEthiopic,
   isStructuralLayout,
+  missingRequiredFactFields,
   themeFor,
   validateTheme,
 } from "./post-theme.js";
@@ -147,6 +148,25 @@ for (const t of Object.values(CATEGORY_THEMES)) {
     check(`${t.key}: free layout declares no fields`, t.factFields.length === 0);
   }
 }
+
+// ---------------------------------------------------------------------------
+// 13. Publish gate: missingRequiredFactFields (Phase 5 hook, enforced in publisher)
+// ---------------------------------------------------------------------------
+check("money blocks empty values",
+  missingRequiredFactFields("money", {}).length === CATEGORY_THEMES.money.factFields.length);
+check("money blocks blank strings",
+  missingRequiredFactFields("money", { location: "  ", deadline: "31 Oct" }).includes("location") &&
+  missingRequiredFactFields("money", { location: "Bole", deadline: "", eligibility: "Students", link: "https://x.com/a" }).join() === "deadline");
+check("money passes when all filled",
+  missingRequiredFactFields("money", { location: "Bole", deadline: "31 Oct", eligibility: "Students", link: "https://t.me/genzi_et" }).length === 0);
+check("events blocks missing date/venue/link",
+  missingRequiredFactFields("events", { venue: "Friendship Park" }).join() === "date,link");
+check("ai-tech blocks missing source link",
+  missingRequiredFactFields("ai-tech", {}).join() === "link");
+check("free layouts never block",
+  ["music", "gaming", "entertainment", "trending", "community", "fashion"].every((k) => missingRequiredFactFields(k, {}).length === 0));
+check("unknown category falls back and never blocks",
+  missingRequiredFactFields("not-a-category", {}).length === 0);
 
 // ---------------------------------------------------------------------------
 console.log(failures === 0 ? "\n✅ All Phase 1 acceptance checks passed." : `\n❌ ${failures} check(s) failed.`);
