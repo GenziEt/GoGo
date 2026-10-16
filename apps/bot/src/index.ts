@@ -913,8 +913,37 @@ app.get("/api/posts/:id/bookmark", telegramAuth, async (req: Request, res: Respo
 app.post("/api/posts/:id/view", telegramAuth, async (req: Request, res: Response) => {
   const post = await db.post.findUnique({ where: { id: String(req.params.id) }, select: { id: true, category: true } });
   if (!post) return res.status(404).json({ success: false, data: null, error: "Post not found", timestamp: new Date().toISOString() });
-  await db.feedEvent.create({ data: { userId: res.locals.telegramUser.id, postId: post.id, event: "VIEW" } }); await awardXp(res.locals.telegramUser.id, "VIEW_POST");
+  // Phase 4 tracked links: the Mini App forwards the deep-link source suffix (post_<slug>_c
+  // from channel buttons, _s from share paths) so weekly attribution is answerable here.
+  // Unknown/missing values normalize to "direct" — never reject a legitimate open.
+  const rawSource = String((req.body as { source?: unknown } | undefined)?.source ?? "");
+  const source = ["c", "s", "direct"].includes(rawSource) ? rawSource : "direct";
+  await db.feedEvent.create({ data: { userId: res.locals.telegramUser.id, postId: post.id, event: "VIEW", source } }); await awardXp(res.locals.telegramUser.id, "VIEW_POST");
   res.json({ success: true, data: { recorded: true }, error: null, timestamp: new Date().toISOString() });
+});
+
+// Phase 4 acceptance check endpoint: "which posts drove the most Mini App opens this week?"
+// answered from our own database (FeedEvent rows), no analytics service. Grouped by slug so
+// channel (_c) and share (_s) attribution stay separable per post.
+app.get("/api/analytics/post-opens", async (_req: Request, res: Response) => {
+  const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const events = await db.feedEvent.findMany({
+    where: { event: "VIEW", createdAt: { gte: since }, NOT: { source: "direct" } },
+    select: { postId: true, source: true }
+  });
+  const byPost = new Map<string, { channel: number; share: number }>();
+  for (const e of events) {
+    const agg = byPost.get(e.postId) ?? { channel: 0, share: 0 };
+    if (e.source === "c") agg.channel++; else if (e.source === "s") agg.share++;
+    byPost.set(e.postId, agg);
+  }
+  const ranked = [...byPost.entries()]
+    .map(([postId, agg]) => ({ postId, channelOpens: agg.channel, shareOpens: agg.share, totalOpens: agg.channel + agg.share }))
+    .sort((a, b) => b.totalOpens - a.totalOpens)
+    .slice(0, 10);
+  const posts = await db.post.findMany({ where: { id: { in: ranked.map(r => r.postId) } }, select: { id: true, slug: true, title: true, seriesKey: true } });
+  const meta = new Map(posts.map(p => [p.id, p]));
+  res.json({ success: true, data: ranked.map(r => ({ slug: meta.get(r.postId)?.slug ?? r.postId, title: meta.get(r.postId)?.title ?? "", seriesKey: meta.get(r.postId)?.seriesKey ?? null, channelOpens: r.channelOpens, shareOpens: r.shareOpens, totalOpens: r.totalOpens })), error: null, timestamp: new Date().toISOString() });
 });
 
 app.get("/api/me/feed", telegramAuth, async (req: Request, res: Response) => {
@@ -2132,7 +2161,9 @@ app.post("/api/posts", telegramAuth, async (req: Request, res: Response) => {
     // Buttons land after publish so Share can point at the real message link. Best-effort.
     await attachChannelButtons(bot, publication.chatId, publication.messageId, {
       slug: post.slug, messageId: publication.messageId, chatId: publication.chatId,
-      linkUrl, linkPlatform, locale: user.locale === "AMHARIC" ? "am" : "en"
+      linkUrl, linkPlatform, locale: user.locale === "AMHARIC" ? "am" : "en",
+      // Phase 4: published channel buttons carry the tracked _c source suffix.
+      buttonSource: "channel"
     });
   } catch (error) { logger.warn("channel publish failed for API post", { postId: post.id, error: String(error) }); }
   await awardXp(user.id, "CREATE_POST");

@@ -113,7 +113,10 @@ function StandardPost({post,onSave,onOpenAuthor,onMessage}:{post:Post;onSave?:()
  // Audit fixes #3 + #4: hydrate repost state/count and hide repost on own posts.
  const[isOwnPost,setIsOwnPost]=React.useState(false);
  const[localError,setLocalError]=React.useState("");
- React.useEffect(()=>{void Promise.all([api(`/api/posts/${post.id}/reactions`).then(r=>r.json()),api(`/api/posts/${post.id}/bookmark`).then(r=>r.ok?r.json():null),api(`/api/posts/${post.id}/comments`).then(r=>r.json()),api(`/api/posts/${post.id}/repost`).then(r=>r.ok?r.json():null)]).then(([r,b,c,rp])=>{if(r?.data)setCounts(r.data);if(b?.data)setSaved(!!b.data.saved);if(Array.isArray(c?.data))setComments(c.data);if(rp?.data){setReposted(!!rp.data.reposted);setRepostCount(rp.data.count??0)}});void api(`/api/users/${post.authorId}/following-status`).then(r=>r.ok?r.json():null).then(x=>{if(x?.data){setAuthorFollow(!!x.data.following);setAuthorFollowers(x.data.followers)}}).catch(()=>undefined);void api("/api/me").then(r=>r.ok?r.json():null).then(x=>{if(x?.data?.id)setIsOwnPost(x.data.id===post.authorId)}).catch(()=>undefined);void api(`/api/posts/${post.id}/view`,{method:"POST"}).catch(()=>undefined)},[post.id]);
+ // Phase 4 tracked links: the deep-link start_param suffix (post_<slug>_c channel / _s share)
+ // is forwarded as `source` on the view event so weekly Mini App attribution works from our DB.
+ const openSource=React.useMemo(()=>{const sp=new URLSearchParams(location.search).get("startapp")??window.Telegram?.WebApp?.initDataUnsafe?.start_param??"";const m=sp.match(/^post_.+_(c|s)$/);return m?m[1]:"direct"},[]);
+ React.useEffect(()=>{void Promise.all([api(`/api/posts/${post.id}/reactions`).then(r=>r.json()),api(`/api/posts/${post.id}/bookmark`).then(r=>r.ok?r.json():null),api(`/api/posts/${post.id}/comments`).then(r=>r.json()),api(`/api/posts/${post.id}/repost`).then(r=>r.ok?r.json():null)]).then(([r,b,c,rp])=>{if(r?.data)setCounts(r.data);if(b?.data)setSaved(!!b.data.saved);if(Array.isArray(c?.data))setComments(c.data);if(rp?.data){setReposted(!!rp.data.reposted);setRepostCount(rp.data.count??0)}});void api(`/api/users/${post.authorId}/following-status`).then(r=>r.ok?r.json():null).then(x=>{if(x?.data){setAuthorFollow(!!x.data.following);setAuthorFollowers(x.data.followers)}}).catch(()=>undefined);void api("/api/me").then(r=>r.ok?r.json():null).then(x=>{if(x?.data?.id)setIsOwnPost(x.data.id===post.authorId)}).catch(()=>undefined);void api(`/api/posts/${post.id}/view`,{method:"POST",body:JSON.stringify({source:openSource})}).catch(()=>undefined)},[post.id]);
  async function react(type:string){haptic("light");const r=await api(`/api/posts/${post.id}/reactions`,{method:"POST",body:JSON.stringify({type})});if(r.ok){const x=await r.json();setCounts(x.data.counts);setReacted(x.data.active)}}
  async function bookmark(){const r=await api(`/api/posts/${post.id}/bookmark`,{method:"POST"});if(r.ok){const x=await r.json();setSaved(x.data.saved);onSave?.()}}
  async function repost(){const r=await api(`/api/posts/${post.id}/repost`,{method:"POST"});if(r.ok){const x=await r.json();setReposted(!!x.data.reposted);setRepostCount(x.data.count)}}
@@ -162,7 +165,9 @@ function App(){
  React.useEffect(()=>{
   const startParam=new URLSearchParams(location.search).get("startapp")??window.Telegram?.WebApp?.initDataUnsafe?.start_param??"";
   if(!startParam.startsWith("post_"))return;
-  const slug=startParam.slice(5);
+  // Phase 4 tracked links: strip the optional _c/_s source suffix before slug lookup so
+  // post_<slug>_c resolves to <slug> (slugs never end in _c/_s — they are word-char only).
+  const slug=startParam.slice(5).replace(/_(c|s)$/,"");
   if(!slug)return;
   void api(`/api/posts/slug/${encodeURIComponent(slug)}`).then(r=>r.ok?r.json():null).then(x=>{
    if(x?.data?.id){setDeepLinkPost(x.data as Post);setTimeout(()=>document.getElementById(`post-${x.data.id}`)?.scrollIntoView({behavior:"smooth",block:"start"}),300)}
