@@ -171,6 +171,7 @@ async function finalizeToPreview(
     author: user.firstName ?? "GENZI",
     linkUrl: submission.linkUrl,
     linkPlatform: submission.linkPlatform,
+    factValues: facts,
   });
 }
 
@@ -203,6 +204,9 @@ interface PreviewContext {
   author: string;
   linkUrl?: string | null;
   linkPlatform?: string | null;
+  // Structured fact values (effective = theme defaults + wizard answers) so the
+  // private preview renders the exact anchored rows that will go live (WYSIWYG).
+  factValues?: Record<string, string | undefined>;
 }
 
 // HTML preview (the old Markdown preview was rejected by Telegram whenever the user's text
@@ -220,6 +224,7 @@ function buildPreview(post: Normalized, locale: Locale, ctxInfo: PreviewContext,
     ...(post.location ? { location: post.location } : {}),
     category: post.category,
     locale,
+    ...(ctxInfo.factValues ? { factValues: ctxInfo.factValues } : {}),
     escapeHtml,
   });
   let caption = render(post.body);
@@ -341,6 +346,7 @@ export function registerPostFlow(bot: Bot): void {
       author: user.firstName ?? "GENZI",
       linkUrl: draft.linkUrl,
       linkPlatform: draft.linkPlatform,
+      factValues: effectiveFacts(normalized.category, draft),
     });
   });
 
@@ -362,6 +368,8 @@ export function registerPostFlow(bot: Bot): void {
     }
     await ctx.answerCallbackQuery();
 
+    // Narrow for the structural signature above (title/body checked non-null in the guard).
+    const sub = submission as typeof submission & { title: string; body: string };
     // Structural categories (money / events / ai-tech) go through the facts step BEFORE the
     // preview — authors fill fields instead of free-typing, and a half-filled block can never
     // reach publish. Free-layout categories finalize straight away.
@@ -371,7 +379,7 @@ export function registerPostFlow(bot: Bot): void {
       await sendFactsReview(ctx, key, submission.id, locale);
       return;
     }
-    await finalizeToPreview(ctx, user, submission, key, locale);
+    await finalizeToPreview(ctx, user, sub, key, locale);
   });
 
   // Facts review screen: tap a field row → collect one answer as text ("fact:<key>" sub-step).
@@ -421,7 +429,8 @@ export function registerPostFlow(bot: Bot): void {
       return;
     }
     await ctx.answerCallbackQuery();
-    await finalizeToPreview(ctx, user, submission, category, locale);
+    const sub = submission as typeof submission & { title: string; body: string };
+    await finalizeToPreview(ctx, user, sub, category, locale);
   });
 
   bot.callbackQuery("publish_preview", async (ctx) => {
@@ -782,6 +791,10 @@ export function registerPostFlow(bot: Bot): void {
           author: user.firstName ?? "GENZI",
           linkUrl: submission.linkUrl,
           linkPlatform: submission.linkPlatform,
+          // Legacy category-by-text path is free-layout only (structural categories go
+          // through the facts step), but pass effective facts anyway so a structural post
+          // that somehow reaches here still previews exactly what the gate will allow.
+          factValues: effectiveFacts(matches[0]!.key, submission),
         });
         return;
       }

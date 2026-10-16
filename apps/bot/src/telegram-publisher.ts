@@ -2,7 +2,7 @@ import type { Bot, InlineKeyboard } from "grammy";
 import { env } from "./config.js";
 import { logger } from "./logger.js";
 import { buildChannelCaption, buildChannelCaptionPlain, buildCaptionParts } from "./post-buttons.js";
-import { missingFactFieldsAfterDefaults, themeFor, type FactFieldSpec } from "./post-theme.js";
+import { factDefaults, missingFactFieldsAfterDefaults, themeFor, type FactFieldSpec } from "./post-theme.js";
 
 // Every channel post is built with the shared premium caption (brand header, spaced body,
 // "👤 Author · 📅 8 Oct 2026" footer) so the private preview and the published post are
@@ -61,8 +61,25 @@ function premiumCaption(input: PublishInput): string {
     publishedAt: new Date(),
     ...(input.location ? { location: input.location } : {}),
     ...(input.category ? { category: input.category } : {}),
+    // Thread the collected fact values into the shared caption builder so the
+    // published post renders the same anchored rows the author saw in preview.
+    ...(input.factValues ? { factValues: input.factValues } : {}),
     escapeHtml,
   });
+}
+
+/**
+ * Effective fact values for a publish path that does not run the wizard (admin
+ * approve/edit-publish, API publish). Applies the theme's own defaults (link →
+ * How/Tickets/Source anchors) and maps the legacy `location` column onto the
+ * money "Where" anchor, so WYSIWYG previews match what the gate already allowed
+ * through — the gate and the renderer stay the SAME computation from post-theme.ts.
+ */
+export function effectivePublishFacts(input: PublishInput): Record<string, string | undefined> {
+  const category = input.category ?? "";
+  const merged: Record<string, string | undefined> = { ...factDefaults(category, { linkUrl: input.linkUrl ?? null }), ...input.factValues };
+  if (category === "money" && !merged.where?.trim() && input.location?.trim()) merged.where = input.location.trim();
+  return merged;
 }
 
 /**
@@ -104,7 +121,10 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
   // must never render, and the full premium caption (with the category chip header)
   // is the fallback surface. Complete posts keep their media untouched.
   const hasMedia = (input.mediaType === "image" || input.mediaType === "video") && Boolean(input.mediaFileId);
-  const caption = premiumCaption(input);
+  // Effective facts (defaults + wizard answers + legacy location mapping) computed ONCE,
+  // after the gate passed — every render path below consumes these so preview == channel.
+  const publishInput: PublishInput = { ...input, factValues: effectivePublishFacts(input) };
+  const caption = premiumCaption(publishInput);
 
   // 1) Everything fits in one message / one caption — the common case.
   if (hasMedia && caption.length <= CAPTION_LIMIT) {
@@ -116,7 +136,7 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
     } catch (error) {
       // HTML parse failure on user content: retry once with the plain-text twin.
       logger.warn("channel caption HTML rejected, falling back to plain text", { error: String(error) });
-      const plain = buildChannelCaptionPlain({ ...input, readingMinutes: input.readingMinutes ?? 1, publishedAt: new Date() }).slice(0, CAPTION_LIMIT);
+      const plain = buildChannelCaptionPlain({ ...publishInput, readingMinutes: publishInput.readingMinutes ?? 1, publishedAt: new Date() }).slice(0, CAPTION_LIMIT);
       const msg = input.mediaType === "image"
         ? await bot.api.sendPhoto(channel, input.mediaFileId as string, { caption: plain })
         : await bot.api.sendVideo(channel, input.mediaFileId as string, { caption: plain });
@@ -129,7 +149,7 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
       return { chatId: String(channel), messageId: msg.message_id };
     } catch (error) {
       logger.warn("channel message HTML rejected, falling back to plain text", { error: String(error) });
-      const plain = buildChannelCaptionPlain({ ...input, readingMinutes: input.readingMinutes ?? 1, publishedAt: new Date() }).slice(0, 4000);
+      const plain = buildChannelCaptionPlain({ ...publishInput, readingMinutes: publishInput.readingMinutes ?? 1, publishedAt: new Date() }).slice(0, 4000);
       const msg = await bot.api.sendMessage(channel, plain);
       return { chatId: String(channel), messageId: msg.message_id };
     }
@@ -142,14 +162,15 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
   //    entities are never cut in half (the old code sliced finished HTML and then re-sent the
   //    whole body again, duplicating text).
   const parts = buildCaptionParts({
-    title: input.title,
-    body: input.body,
-    tags: input.tags,
-    author: input.author,
-    readingMinutes: input.readingMinutes ?? Math.max(1, Math.ceil(input.body.split(/\s+/).filter(Boolean).length / 180)),
+    title: publishInput.title,
+    body: publishInput.body,
+    tags: publishInput.tags,
+    author: publishInput.author,
+    readingMinutes: publishInput.readingMinutes ?? Math.max(1, Math.ceil(publishInput.body.split(/\s+/).filter(Boolean).length / 180)),
     publishedAt: new Date(),
-    ...(input.location ? { location: input.location } : {}),
-    ...(input.category ? { category: input.category } : {}),
+    ...(publishInput.location ? { location: publishInput.location } : {}),
+    ...(publishInput.category ? { category: publishInput.category } : {}),
+    ...(publishInput.factValues ? { factValues: publishInput.factValues } : {}),
     escapeHtml,
   });
   const budget = hasMedia ? CAPTION_LIMIT : TEXT_CHUNK;
