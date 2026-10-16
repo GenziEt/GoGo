@@ -370,9 +370,13 @@ export const VOICE_RULES = {
   forbidMixedScriptSentences: true,
 } as const;
 
-/** True if text contains Ethiopic-range codepoints (ሀ–፿ incl. punctuation band). */
+/**
+ * True if text contains Ethiopic script. The Ge'ez letter block is U+1200-U+137F.
+ * Amharic titles live entirely in this block (the old U+2D80 range never
+ * matched real Amharic and silently broke the mixed-script voice rule).
+ */
 export function hasEthiopic(text: string): boolean {
-  return /[\u{2D80}-\u{2AFF}\u{1E900}-\u{1E95F}]/u.test(text);
+  return /[\u{1200}-\u{137F}\u{1E7E0}-\u{1E7FF}]/u.test(text);
 }
 
 /** True if text contains basic Latin letters (excluding emoji/latin-1 noise). */

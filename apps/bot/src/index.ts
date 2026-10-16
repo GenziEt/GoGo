@@ -16,6 +16,7 @@ import { performModerationAction, type AdminDecision } from "./admin-actions.js"
 import { publishToChannel, publishConfession, deleteChannelMessage } from "./telegram-publisher.js";
 import { parsePlatformLink, attachChannelButtons } from "./post-buttons.js";
 import { moderateText } from "./moderation.js";
+import { validateTheme } from "./post-theme.js";
 import { rateLimit, moderateRequestText, collectTextValues, enforceContentModeration } from "./safety.js";
 import { randomBytes } from "node:crypto";
 import { logger } from "./logger.js";
@@ -2766,6 +2767,17 @@ app.get("/api/posts/:id/repost", telegramAuth, async (req: Request, res: Respons
   const userId = res.locals.telegramUser.id; const [reposted, count] = await Promise.all([db.postRepost.findUnique({ where: { postId_userId: { postId: String(req.params.id), userId } } }), db.postRepost.count({ where: { postId: String(req.params.id) } })]);
   res.json({ success: true, data: { reposted: !!reposted, count }, error: null, timestamp: new Date().toISOString() });
 });
+
+// Phase 1 design-system guard: post-theme.ts is the single source of truth.
+// If a token pair ever fails its contrast promise (someone edits an accent
+// without re-checking), log loudly at boot instead of shipping unreadable cards.
+{
+  const themeIssues = validateTheme();
+  for (const issue of themeIssues) {
+    if (issue.severity === "error") logger.error("post-theme validation failed", { message: issue.message });
+    else logger.warn("post-theme validation warning", { message: issue.message });
+  }
+}
 
 const server = app.listen(env.PORT, () => logger.info("GENZI API listening", { port: env.PORT, mode: env.BOT_MODE, environment: env.NODE_ENV }));
 
