@@ -133,6 +133,13 @@ model Post {
   // Post row so re-publishes, admin approvals, and the Phase 2 card renderer
   // can rebuild the fact block without re-asking the author.
   factsJson         String?
+  // Phase 3 (plan §2 caption position): this post publishes with the caption
+  // ABOVE its media (text-first layouts — opportunities/events — or the
+  // author's explicit choice). Null = never chosen; false = Telegram default.
+  captionAbove      Boolean?
+  // Phase 3 series visual spec: key into the post-theme.ts SERIES registry.
+  // Drives the series chip in captions/cards; null for one-off posts.
+  seriesKey         String?
   authorName        String
   readingMinutes    Int               @default(1)
   publishedAt       DateTime?
@@ -175,6 +182,11 @@ model Submission {
   // Wizard step 4/5: optional official-platform link captured during post creation.
   linkUrl        String?
   linkPlatform   String?
+  // Phase 3 (plan §2 caption position): author chose "caption above media" on the
+  // preview screen. Structural categories (money / events) default to true because
+  // there the text IS the product; free layouts default to false. Persisted so the
+  // choice survives session expiry and reaches publishToChannel.
+  captionAbove   Boolean?
   normalizedJson String?
   previewJson    String?
   moderationJson String?

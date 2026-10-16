@@ -38,6 +38,11 @@ type PublishInput = {
   cardSlug?: string;
   preferCard?: boolean;
   locale?: "en" | "am";
+  // Phase 3 (plan §3 caption position): put the caption ABOVE the media. Used for
+  // opportunities/events where the text IS the product. Requires Bot API 9.3's
+  // `caption_position` — clients that predate it ignore the field silently and show
+  // the default below-caption look, so this is purely additive and safe to ship.
+  captionAbove?: boolean;
 };
 
 // Telegram hard limits: 4096 chars per text message, 1024 per media caption. The post wizard
@@ -164,13 +169,17 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
     }
   }
   const sendPhotoOrVideo = async (source: string | Buffer, cap: string, html: boolean) => {
-    const opts = html ? { caption: cap, parse_mode: "HTML" as const } : { caption: cap };
+    // caption_position lives in SendPhoto/SendVideo params but NOT in grammY's pinned
+    // type bundle yet — set it through a loose record (same pattern as withButtonStyle).
+    // Older servers/clients ignore the unknown field; the post still publishes below-caption.
+    const opts: Record<string, unknown> = html ? { caption: cap, parse_mode: "HTML" } : { caption: cap };
+    if (input.captionAbove === true) opts.caption_position = "Top";
     // A rendered card is a raw PNG buffer — grammY only accepts buffers via InputFile.
     // file_id strings (author media) pass through untouched. Videos are always file_ids.
     const payload = typeof source === "string" ? source : new InputFile(source, "genzi-card.png");
     return hasVideo
-      ? bot.api.sendVideo(channel, source as string, opts)
-      : bot.api.sendPhoto(channel, payload, opts);
+      ? bot.api.sendVideo(channel, source as string, opts as never)
+      : bot.api.sendPhoto(channel, payload, opts as never);
   };
   const hasVideo = input.mediaType === "video" && !cardBuffer;
 
