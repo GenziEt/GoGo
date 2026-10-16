@@ -129,6 +129,10 @@ model Post {
   // the hero "▶️ Watch on …" button on the channel post and inside the Mini App detail view.
   linkUrl           String?
   linkPlatform      String?
+  // Structured fact-block values (see Submission.factsJson). Persisted on the
+  // Post row so re-publishes, admin approvals, and the Phase 2 card renderer
+  // can rebuild the fact block without re-asking the author.
+  factsJson         String?
   authorName        String
   readingMinutes    Int               @default(1)
   publishedAt       DateTime?
@@ -174,6 +178,12 @@ model Submission {
   normalizedJson String?
   previewJson    String?
   moderationJson String?
+  // Structured fact-block values collected by the wizard's "facts" step for
+  // structural categories (money / events / ai-tech). JSON object keyed by
+  // post-theme FactFieldSpec.key ("location", "deadline", ...). The publish
+  // gate in telegram-publisher.ts reads this so a half-filled fact block can
+  // never reach the channel.
+  factsJson      String?
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
   userId         String
