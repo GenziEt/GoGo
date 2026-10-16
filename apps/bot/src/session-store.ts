@@ -3,7 +3,7 @@ import type { Locale } from "./i18n.js";
 import type { Locale as PrismaLocale } from "@prisma/client";
 import { seriesFor } from "./post-theme.js";
 
-export type Step = "title" | "body" | "media" | "link" | "category" | "facts" | `fact:${string}:${string}` | "preview";
+export type Step = "title" | "body" | "media" | "link" | "category" | "facts" | `fact:${string}:${string}` | "series" | "preview";
 // Wizard steps that accept free TEXT input (everything except the preview).
 // The "facts" step is a review screen driven by inline buttons; each
 // "fact:<category>:<key>" sub-step collects one structured fact-block value as text.
@@ -14,11 +14,11 @@ export function isTextInputStep(step: string): boolean {
 // "/skip" is meaningful on these steps: media and link are optional overall steps,
 // and an individual fact field can be cleared back to Missing with /skip.
 export function isSkipAllowedStep(step: string): boolean {
-  return step === "media" || step === "link" || step.startsWith("fact:");
+  return step === "media" || step === "link" || step === "series" || step.startsWith("fact:");
 }
 // Confirms the post wizard's /skip command (media + link steps) and nothing else — the
 // confession flow treats any "/..." as a pass-through command.
-export const POST_WIZARD_STEPS: readonly Step[] = ["title", "body", "media", "link", "category", "facts", "preview"] as const;
+export const POST_WIZARD_STEPS: readonly Step[] = ["title", "body", "media", "link", "category", "facts", "series", "preview"] as const;
 export type ConfessionStep = "confession_body" | "confession_confirm";
 
 export function toPrismaLocale(locale: Locale): PrismaLocale {
@@ -148,4 +148,13 @@ export async function peekCaptionAbove(submissionId: string): Promise<boolean> {
 export async function setSeriesKey(submissionId: string, seriesKey: string | null): Promise<void> {
   if (seriesKey !== null && !seriesFor(seriesKey)) throw new Error(`Unknown series key: ${seriesKey}`);
   await db.submission.update({ where: { id: submissionId }, data: { seriesKey } });
+}
+
+/**
+ * Read the stored series key for a submission. Null/unknown → null (ordinary post),
+ * so legacy rows and untouched defaults behave exactly like "no format".
+ */
+export async function peekSeriesKey(submissionId: string): Promise<string | null> {
+  const row = await db.submission.findUnique({ where: { id: submissionId }, select: { seriesKey: true } });
+  return row?.seriesKey ?? null;
 }
