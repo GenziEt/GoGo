@@ -23,6 +23,7 @@ import {
   validateTheme,
 } from "./post-theme.js";
 import { categories } from "./categories.js";
+import { buildChannelCaption, buildChannelCaptionPlain } from "./post-buttons.js";
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = ""): void {
@@ -167,6 +168,70 @@ check("free layouts never block",
   ["music", "gaming", "entertainment", "trending", "community", "fashion"].every((k) => missingRequiredFactFields(k, {}).length === 0));
 check("unknown category falls back and never blocks",
   missingRequiredFactFields("not-a-category", {}).length === 0);
+
+// ---------------------------------------------------------------------------
+// 14. Caption pipeline: fact rows render in HTML and plain twins (WYSIWYG)
+// ---------------------------------------------------------------------------
+const captionBase = {
+  title: "Ethiopian devs: paid GitHub mentorship",
+  body: "Twelve seats, weekly reviews.",
+  tags: [] as string[],
+  author: "Abel",
+  publishedAt: new Date("2026-10-16T12:00:00Z"),
+  readingMinutes: 1,
+  locale: "en" as const,
+};
+const htmlEsc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+const moneyCaption = buildChannelCaption({
+  ...captionBase,
+  category: "money",
+  factValues: { location: "Remote", deadline: "31 Oct", eligibility: "Students", link: "https://x.com/a" },
+  escapeHtml: htmlEsc,
+});
+check("HTML caption renders all four anchored fact rows",
+  ["📍 <b>Where:</b> Remote", "⏳ <b>Deadline:</b> 31 Oct", "🎯 <b>Who:</b> Students", "🔗 <b>How:</b> https://x.com/a"]
+    .every((row) => moneyCaption.includes(row)));
+check("HTML caption puts fact rows between title and body",
+  moneyCaption.indexOf("GitHub mentorship") < moneyCaption.indexOf("📍 <b>Where:") &&
+  moneyCaption.indexOf("🔗 <b>How:") < moneyCaption.indexOf("Twelve seats"));
+
+const partialCaption = buildChannelCaption({
+  ...captionBase,
+  category: "events",
+  factValues: { date: "Sat 24 Oct", venue: "", link: undefined },
+  escapeHtml: htmlEsc,
+});
+check("half-filled block drops empty anchors only",
+  partialCaption.includes("🕒 <b>When:</b> Sat 24 Oct") &&
+  !partialCaption.includes("Venue") && !partialCaption.includes("Tickets"));
+
+const freeCaption = buildChannelCaption({
+  ...captionBase,
+  category: "music",
+  factValues: { location: "should be ignored" },
+  escapeHtml: htmlEsc,
+});
+check("free layouts never render fact rows", !freeCaption.includes("Where:"));
+
+const noValuesCaption = buildChannelCaption({ ...captionBase, category: "money", escapeHtml: htmlEsc });
+check("legacy callers without factValues unaffected", !noValuesCaption.includes("Where:"));
+
+const escapedCaption = buildChannelCaption({
+  ...captionBase,
+  category: "money",
+  factValues: { location: "<script>x</script>", deadline: "31 Oct", eligibility: "All", link: "https://t.me/genzi_et" },
+  escapeHtml: htmlEsc,
+});
+check("fact values are HTML-escaped", escapedCaption.includes("&lt;script&gt;") && !escapedCaption.includes("<script>"));
+
+const plainCaption = buildChannelCaptionPlain({ ...captionBase, category: "money",
+  factValues: { location: "Remote", deadline: "31 Oct", eligibility: "Students", link: "https://x.com/a" } });
+check("plain twin carries the same rows unstyled",
+  plainCaption.includes("📍 Where: Remote") && plainCaption.includes("⏳ Deadline: 31 Oct"));
+check("HTML and plain twins agree on row content",
+  ["Where", "Deadline", "Who", "How"].every((label) =>
+    moneyCaption.includes(label) === plainCaption.includes(label)));
 
 // ---------------------------------------------------------------------------
 console.log(failures === 0 ? "\n✅ All Phase 1 acceptance checks passed." : `\n❌ ${failures} check(s) failed.`);
