@@ -8,10 +8,12 @@ import { lockPost } from "./post-schema.js";
 import { categoryKeyboard, previewKeyboard } from "./ui.js";
 import { categories } from "./categories.js";
 import { t, type Locale } from "./i18n.js";
-import { getSession, setSession, clearSession, abandonOpenWork, isTextInputStep, isSkipAllowedStep } from "./session-store.js";
+import { getSession, setSession, clearSession, abandonOpenWork, isTextInputStep, isSkipAllowedStep, setPreferCard } from "./session-store.js";
 import { publishToChannel, deleteChannelMessage, requiredFactFieldsFor } from "./telegram-publisher.js";
 import { buildChannelCaption, buildChannelButtons, parsePlatformLink, attachChannelButtons, withButtonStyle } from "./post-buttons.js";
 import { isStructuralLayout, themeFor, factDefaults, missingFactFieldsAfterDefaults, type FactFieldSpec } from "./post-theme.js";
+import { renderCard } from "./card-renderer.js";
+import { InputFile } from "grammy";
 import { logger } from "./logger.js";
 
 /**
@@ -42,31 +44,12 @@ function extractTags(body: string): string[] {
 
 type FactValues = Record<string, string>;
 
-// ---- Phase 2: author's card choice ("use mine" vs "use GENZI card") --------
-// Stored inside the submission's factsJson under a reserved key (no schema
-// migration needed). parseFacts strips it before values reach the publish
-// gate and the caption renderer — it is metadata, never a fact row.
-const CARD_CHOICE_KEY = "_card";
+// --- Phase 2: author's card choice ("use mine" vs "use GENZI card") ---------
+// Persisted on the Session row (see session-store.ts setPreferCard) — NOT inside
+// factsJson, which must stay pure fact values for the publish gate and renderer.
+// "use mine" is the default when the author never taps the choice row.
 
-function parseCardChoice(raw: string | null | undefined): boolean {
-  if (!raw) return false;
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return !!parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      && (parsed as Record<string, unknown>)[CARD_CHOICE_KEY] === "genzi";
-  } catch {
-    return false;
-  }
-}
-
-async function setCardChoice(submissionId: string, useGenziCard: boolean): Promise<void> {
-  const submission = await db.submission.findUnique({ where: { id: submissionId } });
-  const facts = parseFacts(submission?.factsJson);
-  if (useGenziCard) facts[CARD_CHOICE_KEY] = "genzi";
-  else delete facts[CARD_CHOICE_KEY];
-  await db.submission.update({ where: { id: submissionId }, data: { factsJson: JSON.stringify(facts) } });
-}
-
+/** Author-entered fact values only (no defaults merged). Corrupted JSON reads as empty. */
 function parseFacts(raw: string | null | undefined): FactValues {
   if (!raw) return {};
   try {
@@ -74,7 +57,7 @@ function parseFacts(raw: string | null | undefined): FactValues {
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const out: FactValues = {};
       for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-        if (typeof v === "string" && k !== CARD_CHOICE_KEY) out[k] = v;
+        if (typeof v === "string") out[k] = v;
       }
       return out;
     }
@@ -264,7 +247,13 @@ function buildPreview(post: Normalized, locale: Locale, ctxInfo: PreviewContext,
   return caption;
 }
 
-async function sendPreview(ctx: Context, post: Normalized, locale: Locale, ctxInfo: PreviewContext): Promise<void> {
+async function sendPreview(
+  ctx: Context,
+  post: Normalized,
+  locale: Locale,
+  ctxInfo: PreviewContext,
+  preferCard = false,
+): Promise<void> {
   // Channel-style buttons under the preview (messageId: null — Share falls back to the Mini App
   // deep link until the real channel message id exists after publishing). The approval actions
   // are callback buttons, so they live on their own rows BELOW the URL-type channel rows
