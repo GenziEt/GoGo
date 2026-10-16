@@ -110,3 +110,13 @@ export async function clearSession(telegramUserId: number) {
     where: { telegramUserId: String(telegramUserId) },
   });
 }
+
+// Phase 2 (plan §2.3): the author's "use mine" vs "use GENZI card" choice, persisted
+// on the session row. setSession upserts by telegramUserId and never touches this
+// column, so re-entering a step (e.g. edit → preview) keeps the stored choice.
+export async function setPreferCard(telegramUserId: number, preferCard: boolean): Promise<void> {
+  await db.conversationSession.update({
+    where: { telegramUserId: String(telegramUserId) },
+    data: { preferCard },
+  });
+}

@@ -22,6 +22,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { ReactNode } from "react";
 import satori from "satori";
 import { Resvg } from "@resvg/resvg-js";
 
@@ -47,7 +48,7 @@ export interface CardInput {
   category: string;
   locale: "en" | "am";
   /** Structured fact values (Where / Deadline / Who …). Empty entries never render. */
-  factValues?: Record<string, string | undefined>;
+  factValues?: Record<string, string | undefined> | undefined;
   /** Optional body line shown under the title for short-story layouts. */
   subtitle?: string;
 }
@@ -76,6 +77,7 @@ export interface CardPng {
 
 interface FontSlot {
   name: string;
+  /** Satori accepts numeric CSS weights (1–1000). */
   weight: number;
   file: string;
 }
@@ -547,7 +549,7 @@ export async function renderCardSvg(input: CardInput): Promise<string> {
   return satori(el as unknown as ReactNode, {
     width: LAYOUT_METRICS.cardWidthPx,
     height: LAYOUT_METRICS.cardHeightPx,
-    fonts,
+    fonts: fonts as never, // grammY-free satori FontOptions use a string|number Weight union
   });
 }
 

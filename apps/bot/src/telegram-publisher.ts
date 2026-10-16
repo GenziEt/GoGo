@@ -1,4 +1,5 @@
 import type { Bot, InlineKeyboard } from "grammy";
+import { InputFile } from "grammy";
 import { env } from "./config.js";
 import { logger } from "./logger.js";
 import { buildChannelCaption, buildChannelCaptionPlain, buildCaptionParts } from "./post-buttons.js";
@@ -164,9 +165,12 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
   }
   const sendPhotoOrVideo = async (source: string | Buffer, cap: string, html: boolean) => {
     const opts = html ? { caption: cap, parse_mode: "HTML" as const } : { caption: cap };
+    // A rendered card is a raw PNG buffer — grammY only accepts buffers via InputFile.
+    // file_id strings (author media) pass through untouched. Videos are always file_ids.
+    const payload = typeof source === "string" ? source : new InputFile(source, "genzi-card.png");
     return hasVideo
       ? bot.api.sendVideo(channel, source as string, opts)
-      : bot.api.sendPhoto(channel, source, opts);
+      : bot.api.sendPhoto(channel, payload, opts);
   };
   const hasVideo = input.mediaType === "video" && !cardBuffer;
 
