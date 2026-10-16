@@ -569,7 +569,9 @@ function logoImage(): Block {
       {
         fontSize: `${TYPOGRAPHY.chip.sizePx}px`,
         fontWeight: TYPOGRAPHY.chip.weight,
-        color: "#FFFFFF",
+        // Token-sourced (theme lint): the logo-fallback brand mark uses the
+        // same maximum-emphasis title color every other headline uses.
+        color: BASE.colors.title,
       },
       escapeHtml(BRAND.mark),
     );
