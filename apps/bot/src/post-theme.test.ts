@@ -307,8 +307,8 @@ check("voice: over-long title is blocked at the 60-char rule, not the 100-char i
 check("voice: exactly maxTitleChars passes (boundary)",
   voiceViolations({ title: "B".repeat(VOICE_RULES.maxTitleChars) }).length === 0);
 
-check("voice: mixed Amharic/English sentence is blocked",
-  voiceViolations({ title: "OK", body: "ይህ ምርጥ product ነው።" }).some((v) => v.includes("mixed Amharic/English")));
+check("voice: mixed Amharic/English sentence is ACCEPTED (SEO)",
+  voiceViolations({ title: "OK", body: "ይህ ምርጥ product ነው።" }).length === 0);
 
 check("voice: brand-allowlisted loanwords pass in an otherwise Amharic sentence",
   voiceViolations({ title: "OK", body: "አዲሱ AI መተግበሪያ ተመርቋል።" }).length === 0 &&

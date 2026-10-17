@@ -152,7 +152,9 @@ export function registerConfessionFlow(bot: Bot): void {
     const session = await getSession(ctx.from.id);
     const confessionId = session?.confessionId;
     if (!session || !confessionId || session.step !== "confession_confirm")
-      return ctx.answerCallbackQuery(t(fromPrismaLocale(session?.locale ?? "AMHARIC"), "sessionExpired"));
+      return ctx.answerCallbackQuery(
+        t(fromPrismaLocale(session?.locale ?? "AMHARIC"), session ? "notReady" : "sessionExpired"),
+      );
     const locale = fromPrismaLocale(session.locale);
 
     if (ctx.match[1] === "no") {
