@@ -484,7 +484,7 @@ export function registerPostFlow(bot: Bot): void {
     const choice = ctx.match[2];
     const session = await getSession(ctx.from.id);
     if (!session || session.submissionId !== submissionId || session.step !== "preview")
-      return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+      return ctx.answerCallbackQuery(t(locale, "notReady"));
     const submission = await db.submission.findUnique({ where: { id: submissionId } });
     if (!submission || submission.state !== "PREVIEW" || !submission.normalizedJson)
       return ctx.answerCallbackQuery(t(locale, "notReady"));
@@ -520,13 +520,13 @@ export function registerPostFlow(bot: Bot): void {
     const submissionId = session?.submissionId;
     // Stale category buttons (from an old message) must not advance a flow that isn't at the category step.
     if (!session || !submissionId || session.step !== "category")
-      return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+      return ctx.answerCallbackQuery(t(locale, "notReady"));
     const key = ctx.match[1];
     if (!key || !categories.some((c) => c.key === key)) return ctx.answerCallbackQuery();
     const submission = await db.submission.findUnique({ where: { id: submissionId } });
     if (!submission || submission.userId !== user.id || submission.state !== "INPUT" || !submission.title || !submission.body) {
       await clearSession(ctx.from.id);
-      return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+      return ctx.answerCallbackQuery(t(locale, "rejected"));
     }
     await ctx.answerCallbackQuery();
 
@@ -554,12 +554,12 @@ export function registerPostFlow(bot: Bot): void {
     const session = await getSession(ctx.from.id);
     const submissionId = session?.submissionId;
     if (!session || !submissionId || session.step !== "series")
-      return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+      return ctx.answerCallbackQuery(t(locale, "notReady"));
     const key = ctx.match[1]!;
     const submission = await db.submission.findUnique({ where: { id: submissionId } });
     if (!submission || submission.userId !== user.id || submission.state !== "INPUT" || !submission.category || !submission.title || !submission.body) {
       await clearSession(ctx.from.id);
-      return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+      return ctx.answerCallbackQuery(t(locale, "rejected"));
     }
     if (key !== "none" && !seriesFor(key)) return ctx.answerCallbackQuery();
     await setSeriesKey(submissionId, key === "none" ? null : key);
@@ -577,8 +577,8 @@ export function registerPostFlow(bot: Bot): void {
     const session = await getSession(ctx.from.id);
     const submissionId = session?.submissionId;
     if (!session || !submissionId || session.step !== "preview")
-      return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
-    if (ctx.match[1] !== submissionId) return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+      return ctx.answerCallbackQuery(t(locale, "notReady"));
+    if (ctx.match[1] !== submissionId) return ctx.answerCallbackQuery(t(locale, "notReady"));
     const submission = await db.submission.findUnique({ where: { id: submissionId } });
     if (!submission || submission.state !== "PREVIEW" || !submission.normalizedJson)
       return ctx.answerCallbackQuery(t(locale, "notReady"));
@@ -612,14 +612,14 @@ export function registerPostFlow(bot: Bot): void {
     const session = await getSession(ctx.from.id);
     const submissionId = session?.submissionId;
     if (!session || !submissionId || session.step !== "facts")
-      return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+      return ctx.answerCallbackQuery(t(locale, "notReady"));
     const [, category, key] = ctx.match as unknown as string[];
     const field = requiredFactFieldsFor(category!).find((f) => f.key === key);
-    if (!field) return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+    if (!field) return ctx.answerCallbackQuery(t(locale, "notReady"));
     const submission = await db.submission.findUnique({ where: { id: submissionId } });
     if (!submission || submission.userId !== user.id || submission.state !== "INPUT") {
       await clearSession(ctx.from.id);
-      return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+      return ctx.answerCallbackQuery(t(locale, "rejected"));
     }
     await ctx.answerCallbackQuery();
     // The step encodes BOTH field key and category so the text-input handler (which only
@@ -638,12 +638,12 @@ export function registerPostFlow(bot: Bot): void {
     const session = await getSession(ctx.from.id);
     const submissionId = session?.submissionId;
     if (!session || !submissionId || session.step !== "facts")
-      return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+      return ctx.answerCallbackQuery(t(locale, "notReady"));
     const category = ctx.match[1]!;
     const submission = await db.submission.findUnique({ where: { id: submissionId } });
     if (!submission || submission.userId !== user.id || submission.state !== "INPUT" || !submission.title || !submission.body) {
       await clearSession(ctx.from.id);
-      return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+      return ctx.answerCallbackQuery(t(locale, "rejected"));
     }
     const missing = missingFactFieldsAfterDefaults(category, effectiveFacts(category, submission), { linkUrl: submission.linkUrl });
     if (missing.length > 0) {
@@ -662,7 +662,7 @@ export function registerPostFlow(bot: Bot): void {
     const session = await getSession(ctx.from.id);
     const submissionId = session?.submissionId;
     if (!session || !submissionId || session.step !== "preview")
-      return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+      return ctx.answerCallbackQuery(t(locale, "notReady"));
 
     // Atomic claim: only one tap can move PREVIEW -> PREPARING, so a double-tap can no longer
     // publish the same post to the channel twice.
@@ -678,7 +678,7 @@ export function registerPostFlow(bot: Bot): void {
     if (!normalized.title || !normalized.body) {
       await db.submission.update({ where: { id: submissionId }, data: { state: "REJECTED" } });
       await clearSession(ctx.from.id);
-      return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+      return ctx.answerCallbackQuery(t(locale, "notReady"));
     }
     const author = user.firstName ?? "GENZI";
     const locked = lockPost(normalized, author);
@@ -783,7 +783,7 @@ export function registerPostFlow(bot: Bot): void {
     const session = await getSession(ctx.from.id);
     const submissionId = session?.submissionId;
     if (!session || !submissionId || session.step !== "preview")
-      return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+      return ctx.answerCallbackQuery(t(locale, "notReady"));
     // Only a moderation-clean PREVIEW can become a draft. Previously this overwrote QUARANTINED
     // submissions with DRAFT, silently removing them from the moderator queue.
     const saved = await db.submission.updateMany({
@@ -803,7 +803,7 @@ export function registerPostFlow(bot: Bot): void {
     const session = await getSession(ctx.from.id);
     const submissionId = session?.submissionId;
     if (!session || !submissionId || session.step !== "preview")
-      return ctx.answerCallbackQuery(t(locale, "sessionExpired"));
+      return ctx.answerCallbackQuery(t(locale, "notReady"));
     // Back to INPUT so an old preview's Publish button can't publish stale content mid-edit.
     // The link fields are cleared too — re-running the wizard must not silently reuse a stale
     // link (the Link step is optional, /skip resets it to null). factsJson is reset for the
@@ -856,7 +856,7 @@ export function registerPostFlow(bot: Bot): void {
     const submission = await db.submission.findUnique({ where: { id: submissionId } });
     if (!submission || submission.userId !== user.id || submission.state !== "INPUT") {
       await clearSession(ctx.from.id);
-      await ctx.reply(t(locale, "sessionExpired"));
+      await ctx.reply(t(locale, "notReady"));
       return;
     }
     const staff = user.role !== "USER";
@@ -890,7 +890,7 @@ export function registerPostFlow(bot: Bot): void {
       if (!field || submission.category !== category) {
         // Stale sub-step (category changed underneath us): drop back to a safe state.
         await clearSession(ctx.from.id);
-        await ctx.reply(t(locale, "sessionExpired"));
+        await ctx.reply(t(locale, "notReady"));
         return;
       }
       if (text === "/skip") {

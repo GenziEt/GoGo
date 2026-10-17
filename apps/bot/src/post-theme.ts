@@ -479,8 +479,15 @@ export const VOICE_RULES = {
   maxCallsToAction: 1,
   /** Paragraphs hold one idea each — enforced as max sentences per paragraph. */
   maxSentencesPerParagraph: 2,
-  /** Amharic and English never mix within a single sentence (checked per-sentence). */
-  forbidMixedScriptSentences: true,
+  /**
+   * Mixed Amharic/English sentences are ALLOWED. Search engines index each
+   * script independently, so bilingual copy improves SEO reach for both the
+   * Amharic- and English-speaking audiences. Set to false deliberately —
+   * `voiceViolations()` no longer flags mixed-script sentences at any gate
+   * (wizard title/body steps or the publish gate). The detector
+   * (`findMixedScriptSentences`) is kept for analytics/editorial hints only.
+   */
+  forbidMixedScriptSentences: false,
 } as const;
 
 /**
@@ -535,9 +542,11 @@ export const VOICE_ALLOWLIST = [
  * publish gate checks it one final time (nothing violating ever ships —
  * Phase 5 anti-drift: rules that are only declared are suggestions).
  *
- * Checked here: title length (< maxTitleChars), one-idea paragraphs
- * (maxSentencesPerParagraph), and the no-mixed-script-sentence rule with the
- * brand allowlist applied. CTA count is intentionally NOT blocked mechanically:
+ * Checked here: title length (< maxTitleChars) and one-idea paragraphs
+ * (maxSentencesPerParagraph). The mixed-script rule is OFF by default
+ * (`VOICE_RULES.forbidMixedScriptSentences === false`) because bilingual
+ * Amharic/English copy is accepted for SEO; the detector stays available if
+ * the flag is ever re-enabled. CTA count is intentionally NOT blocked mechanically:
  * detecting calls-to-action in two scripts without false positives is not
  * reliable yet, so it stays an editorial rule backed by the single review
  * rule ("a screenshot must not be mistakable for another channel").
@@ -551,9 +560,15 @@ export function voiceViolations(post: { title: string; body?: string | null }): 
   }
 
   if (post.body && post.body.trim()) {
-    const offenders = findMixedScriptSentences(post.body, VOICE_ALLOWLIST);
-    if (offenders.length > 0) {
-      violations.push(`mixed Amharic/English in sentence(s) ${offenders.map((i) => i + 1).join(", ")}`);
+    // Mixed Amharic/English sentences are intentionally NOT a violation any
+    // more (SEO: bilingual copy indexes in both scripts). The check below only
+    // runs while `forbidMixedScriptSentences` is true — the detector stays
+    // available for editorial hints, it just never blocks a publish.
+    if (VOICE_RULES.forbidMixedScriptSentences) {
+      const offenders = findMixedScriptSentences(post.body, VOICE_ALLOWLIST);
+      if (offenders.length > 0) {
+        violations.push(`mixed Amharic/English in sentence(s) ${offenders.map((i) => i + 1).join(", ")}`);
+      }
     }
     const paragraphs = post.body.split(/\n{2,}/);
     for (let p = 0; p < paragraphs.length; p++) {

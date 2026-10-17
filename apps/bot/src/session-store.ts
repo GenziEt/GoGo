@@ -79,9 +79,10 @@ export async function setConfessionSession(
   });
 }
 
-// Sessions expire after 30 minutes of inactivity so an abandoned wizard can't swallow the
-// user's later messages indefinitely.
-const SESSION_TTL_MS = 30 * 60 * 1000;
+// Sessions expire after 60 minutes of inactivity so an abandoned wizard can't swallow the
+// user's later messages indefinitely. (30 min was too tight for a bilingual drafting flow —
+// authors who paused to translate/SEO-tune copy came back to a false "session expired".)
+const SESSION_TTL_MS = 60 * 60 * 1000;
 
 export async function getSession(telegramUserId: number) {
   const session = await db.conversationSession.findUnique({
