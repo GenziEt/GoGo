@@ -11,7 +11,7 @@ import { t, type Locale } from "./i18n.js";
 import { getSession, setSession, clearSession, abandonOpenWork, isTextInputStep, isSkipAllowedStep, setPreferCard, setCaptionAbove, peekCaptionAbove, setSeriesKey, peekSeriesKey } from "./session-store.js";
 import { publishToChannel, deleteChannelMessage, requiredFactFieldsFor } from "./telegram-publisher.js";
 import { buildChannelCaption, buildChannelButtons, parsePlatformLink, attachChannelButtons, withButtonStyle } from "./post-buttons.js";
-import { isStructuralLayout, themeFor, factDefaults, missingFactFieldsAfterDefaults, brandChipLine, seriesFor, SERIES, type FactFieldSpec } from "./post-theme.js";
+import { isStructuralLayout, themeFor, factDefaults, missingFactFieldsAfterDefaults, brandChipLine, seriesFor, voiceViolations, VOICE_RULES, SERIES, type FactFieldSpec } from "./post-theme.js";
 import { renderCard, clampTitle } from "./card-renderer.js";
 import { InputFile } from "grammy";
 import { logger } from "./logger.js";
@@ -910,6 +910,14 @@ export function registerPostFlow(bot: Bot): void {
         await ctx.reply(t(locale, "titleInvalid"));
         return;
       }
+      // Voice rule (Phase 1.3/5): titles under 60 characters, checked AT INPUT
+      // so the author fixes it immediately instead of at publish time. The
+      // limit is read from VOICE_RULES — same constant the publish gate uses.
+      const titleIssues = voiceViolations({ title: text });
+      if (titleIssues.length > 0) {
+        await ctx.reply(`${t(locale, "voiceTitleRejected", { limit: VOICE_RULES.maxTitleChars })}\n${titleIssues.join("\n")}`);
+        return;
+      }
       if (await hardReject(text)) return;
       await db.submission.update({ where: { id: submission.id }, data: { title: text } });
       await setSession(ctx.from.id, submissionId, "body", locale);
@@ -920,6 +928,15 @@ export function registerPostFlow(bot: Bot): void {
     if (session.step === "body") {
       if (!text || text.length > 6000) {
         await ctx.reply(t(locale, "bodyInvalid"));
+        return;
+      }
+      // Voice rules (Phase 1.3/5) on the body too: one idea per paragraph and
+      // no Amharic/English mixing within a sentence (brand loanwords exempt).
+      // Titles are already clean (checked above), so only body issues surface.
+      const storedTitle = typeof submission.title === "string" ? submission.title : "";
+      const bodyIssues = voiceViolations({ title: storedTitle, body: text }).filter((v) => !v.startsWith("title "));
+      if (bodyIssues.length > 0) {
+        await ctx.reply(`${t(locale, "voiceBodyRejected")}\n• ${bodyIssues.join("\n• ")}`);
         return;
       }
       if (await hardReject(text)) return;

@@ -3,7 +3,7 @@ import { InputFile } from "grammy";
 import { env } from "./config.js";
 import { logger } from "./logger.js";
 import { buildChannelCaption, buildChannelCaptionPlain, buildCaptionParts } from "./post-buttons.js";
-import { CHANNEL_REACTIONS, factDefaults, missingFactFieldsAfterDefaults, themeFor, VOICE_RULES, type FactFieldSpec } from "./post-theme.js";
+import { CHANNEL_REACTIONS, factDefaults, missingFactFieldsAfterDefaults, themeFor, VOICE_RULES, voiceViolations, type FactFieldSpec } from "./post-theme.js";
 import { renderCard } from "./card-renderer.js";
 
 // Every channel post is built with the shared premium caption (brand header, spaced body,
@@ -157,6 +157,14 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
   );
   if (missingFacts.length > 0) {
     throw new Error(`publish blocked: category "${input.category ?? "?"}" is missing required fact fields: ${missingFacts.join(", ")}`);
+  }
+  // Voice gate (Phase 1.3 rules + Phase 5 anti-drift): brand-voice violations —
+  // over-long titles, multi-idea paragraphs, mixed Amharic/English sentences —
+  // are refused HERE too, not just at the wizard, so no path (wizard, admin
+  // approve, API, scheduler) can ship a post that breaks the declared rules.
+  const voiceIssues = voiceViolations(input);
+  if (voiceIssues.length > 0) {
+    throw new Error(`publish blocked: brand-voice violation(s): ${voiceIssues.join("; ")}`);
   }
   const channel = env.GENZI_CHANNEL_ID;
   // Blocked structural posts lose their media on purpose: a half-filled fact block
