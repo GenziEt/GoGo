@@ -50,6 +50,8 @@ const am = {
   cancelled: "❌ ሂደቱ ተሰርዟል።",
   sessionExpired: "⌛ ክፍለ ጊዜው አብቅቷል። ከዋናው ዝርዝር እንደገና ይጀምሩ (/start)።",
   titleInvalid: "❌ ርዕሱ አስፈላጊ ነው እና ከ100 ፊደል አይበልጥም።",
+  voiceTitleRejected: "❌ ርዕሱ የGENZI ደንብ አሟላለች። እንደገና ይሞክሩ፦",
+  voiceBodyRejected: "❌ መግለጫው የGENZI ደንብ አሟላለች። እንደገና ያስተካክሉ፦",
   bodyInvalid: "❌ ጽሑፉ አስፈላጊ ነው እና ከ6000 ፊደል አይበልጥም።",
   mediaInvalid: "❌ ምስል/ቪዲዮ ይላኩ ወይም /skip ይጫኑ።",
   notReady: "⏳ ይህ ቅድመ እይታ አሁን ሊታተም አይችልም (ቀድሞ ታትሟል ወይም ተሰርዟል)።",
@@ -112,6 +114,8 @@ const en = {
   cancelled: "❌ Cancelled.",
   sessionExpired: "⌛ This session expired. Start again from the main menu (/start).",
   titleInvalid: "❌ A title is required (max 100 characters).",
+  voiceTitleRejected: "❌ That title breaks a GENZI voice rule. Try again:",
+  voiceBodyRejected: "❌ That body breaks GENZI voice rules. Fix and resend:",
   bodyInvalid: "❌ Text is required (max 6000 characters).",
   mediaInvalid: "❌ Send an image/video, or /skip.",
   notReady: "⏳ This preview can't be published right now (already published or cancelled).",
@@ -124,6 +128,10 @@ const en = {
   accountRestricted: "⏳ Your account is temporarily restricted. Please try again later."
 } as const;
 
-export function t(locale: Locale, key: keyof typeof am): string {
-  return locale === "am" ? am[key] : en[key];
+export function t(locale: Locale, key: keyof typeof am, vars?: Record<string, string | number>): string {
+  const raw: string = locale === "am" ? am[key] : en[key];
+  if (!vars) return raw;
+  let out = raw;
+  for (const [name, value] of Object.entries(vars)) out = out.replaceAll(`{${name}}`, String(value));
+  return out;
 }

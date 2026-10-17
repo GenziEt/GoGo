@@ -518,6 +518,58 @@ export function findMixedScriptSentences(text: string, allowlist: readonly strin
 }
 
 /**
+ * Brand-approved loanwords exempt from the mixed-script rule (Phase 1.3:
+ * "Amharic and English never mixed in the same sentence" — but tech/fashion
+ * copy legitimately says "AI", "app", "GIF"). Lives HERE, not at call sites,
+ * so the wizard and the publish gate can never disagree about what passes.
+ */
+export const VOICE_ALLOWLIST = [
+  "AI", "IT", "App", "Apps", "GPT", "GIF", "Meme", "Memex", "DJ", "MC",
+  "URL", "VPN", "WiFi", "eSIM", "PIN", "OTP", "QR", "STEM", "OK",
+] as const;
+
+/**
+ * Machine-checkable enforcement of the Phase 1.3 brand-voice rules. Returns
+ * human-readable violation strings; an EMPTY array means the post passes.
+ * The wizard checks this per-step (author gets immediate feedback) AND the
+ * publish gate checks it one final time (nothing violating ever ships —
+ * Phase 5 anti-drift: rules that are only declared are suggestions).
+ *
+ * Checked here: title length (< maxTitleChars), one-idea paragraphs
+ * (maxSentencesPerParagraph), and the no-mixed-script-sentence rule with the
+ * brand allowlist applied. CTA count is intentionally NOT blocked mechanically:
+ * detecting calls-to-action in two scripts without false positives is not
+ * reliable yet, so it stays an editorial rule backed by the single review
+ * rule ("a screenshot must not be mistakable for another channel").
+ */
+export function voiceViolations(post: { title: string; body?: string | null }): string[] {
+  const violations: string[] = [];
+
+  const title = post.title.trim();
+  if (title.length > VOICE_RULES.maxTitleChars) {
+    violations.push(`title is ${title.length} characters (limit ${VOICE_RULES.maxTitleChars})`);
+  }
+
+  if (post.body && post.body.trim()) {
+    const offenders = findMixedScriptSentences(post.body, VOICE_ALLOWLIST);
+    if (offenders.length > 0) {
+      violations.push(`mixed Amharic/English in sentence(s) ${offenders.map((i) => i + 1).join(", ")}`);
+    }
+    const paragraphs = post.body.split(/\n{2,}/);
+    for (let p = 0; p < paragraphs.length; p++) {
+      const text = (paragraphs[p] ?? "").trim();
+      if (!text) continue;
+      const sentences = text.split(/(?<=[.!…።])\s+|\n+/).filter((s) => s.trim().length > 0);
+      if (sentences.length > VOICE_RULES.maxSentencesPerParagraph) {
+        violations.push(`paragraph ${p + 1} has ${sentences.length} sentences (limit ${VOICE_RULES.maxSentencesPerParagraph} — one idea per paragraph)`);
+      }
+    }
+  }
+
+  return violations;
+}
+
+/**
  * Wizard gate for structural categories (Phase 1.1 layout table). A post in a
  * fact-block / event-block / tldr-keypoints category may not publish while any
  * required fact field is missing or blank — this is the rule Phase 5's schema

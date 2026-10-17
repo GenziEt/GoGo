@@ -25,6 +25,8 @@ import {
   seriesFor,
   themeFor,
   validateTheme,
+  voiceViolations,
+  VOICE_ALLOWLIST,
 } from "./post-theme.js";
 import { categories } from "./categories.js";
 import { buildCaptionParts, buildChannelCaption, buildChannelCaptionPlain } from "./post-buttons.js";
@@ -292,6 +294,37 @@ check("head/tail untouched by splitting (chip, title, footer always in message o
   longParts.head.includes("<b>") && longParts.tail.includes("min read"));
 check("expandAfterChars unset → legacy behavior, body stays whole",
   buildCaptionParts({ ...captionBase, body: wholeBody, escapeHtml: htmlEsc }).hiddenBody === "");
+
+// ---------------------------------------------------------------------------
+// 17. Phase 5 — voice-rule enforcement (declared rules must actually block)
+// ---------------------------------------------------------------------------
+check("voice: clean post passes",
+  voiceViolations({ title: "የገንዘብ ዕድሎች ሳምንቱ", body: "አዲስ የስልክ መተግበሪያ ተመርቋል።\n\nለሁሉም ክፍት ነው።" }).length === 0);
+
+check("voice: over-long title is blocked at the 60-char rule, not the 100-char input cap",
+  voiceViolations({ title: "A".repeat(VOICE_RULES.maxTitleChars + 1) }).some((v) => v.startsWith("title")));
+
+check("voice: exactly maxTitleChars passes (boundary)",
+  voiceViolations({ title: "B".repeat(VOICE_RULES.maxTitleChars) }).length === 0);
+
+check("voice: mixed Amharic/English sentence is blocked",
+  voiceViolations({ title: "OK", body: "ይህ ምርጥ product ነው።" }).some((v) => v.includes("mixed Amharic/English")));
+
+check("voice: brand-allowlisted loanwords pass in an otherwise Amharic sentence",
+  voiceViolations({ title: "OK", body: "አዲሱ AI መተግበሪያ ተመርቋል።" }).length === 0 &&
+  VOICE_ALLOWLIST.includes("AI"));
+
+check("voice: three sentences in one paragraph breaks one-idea-per-paragraph",
+  voiceViolations({ title: "OK", body: "First idea. Second idea. Third idea." }).some((v) => v.includes("one idea per paragraph")));
+
+check("voice: two sentences in one paragraph still pass (limit is 2)",
+  voiceViolations({ title: "OK", body: "First idea. Second idea." }).length === 0);
+
+check("voice: missing/empty body never produces violations",
+  voiceViolations({ title: "OK" }).length === 0 && voiceViolations({ title: "OK", body: "   " }).length === 0);
+
+check("voice: violation strings are human-readable (wizard shows them verbatim)",
+  voiceViolations({ title: "x".repeat(80) }).some((v) => v.includes("limit 60")));
 
 // ---------------------------------------------------------------------------
 console.log(failures === 0 ? "\n✅ All Phase 1–3 acceptance checks passed." : `\n❌ ${failures} check(s) failed.`);
