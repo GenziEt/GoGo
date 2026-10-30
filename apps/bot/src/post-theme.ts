@@ -574,7 +574,12 @@ export function voiceViolations(post: { title: string; body?: string | null }): 
     for (let p = 0; p < paragraphs.length; p++) {
       const text = (paragraphs[p] ?? "").trim();
       if (!text) continue;
-      const sentences = text.split(/(?<=[.!…።])\s+|\n+/).filter((s) => s.trim().length > 0);
+      // Publish-flow fix: a bare line break is NOT a sentence boundary. The old
+      // splitter treated every `\n` as one, so legitimate bullet lists and
+      // multi-line Amharic/English posts ("idea per line") were blocked at the
+      // publish gate. Sentences end only at terminators (. ! … ።) followed by
+      // whitespace — line breaks inside a paragraph are formatting, not ideas.
+      const sentences = text.split(/(?<=[.!…።])[ \t]+/).filter((s) => s.trim().length > 0);
       if (sentences.length > VOICE_RULES.maxSentencesPerParagraph) {
         violations.push(`paragraph ${p + 1} has ${sentences.length} sentences (limit ${VOICE_RULES.maxSentencesPerParagraph} — one idea per paragraph)`);
       }
