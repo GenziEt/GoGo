@@ -700,9 +700,13 @@ export function registerPostFlow(bot: Bot): void {
         ...(locked.metadata.location ? { location: locked.metadata.location } : {}),
         category: locked.metadata.category,
         readingMinutes: locked.metadata.readingMinutes,
-        // Same values the facts step collected — the gate in publishToChannel re-verifies
-        // them against post-theme.ts before anything reaches the channel.
-        factValues: parseFacts(submission.factsJson),
+        // Publish-flow fix: send the EFFECTIVE fact values (theme defaults +
+        // author answers), not the raw factsJson — the gate inside
+        // publishToChannel fills link → How/Tickets/Source defaults, and the
+        // preview already rendered those merged values. Passing raw answers
+        // here made the publish gate disagree with the wizard's own check
+        // (factsdone) and blocked posts the author saw as complete.
+        factValues: effectiveFacts(locked.metadata.category, submission),
         linkUrl,
         // Phase 3 stored wizard choices ride to Telegram itself (the preview already
         // showed them): caption position for media posts and the series chip line.
@@ -715,9 +719,12 @@ export function registerPostFlow(bot: Bot): void {
         locale: toI18nLocale(user.locale),
       });
     } catch (error) {
+      // Diagnostics fix: show the author WHY publishing failed (gate reason or
+      // Telegram API error) instead of the generic "try again later" string.
       logger.error("GENZI channel publication failed", { error: String(error) });
       await revert();
-      return ctx.answerCallbackQuery(t(locale, "publishFailed"));
+      const reason = String(error instanceof Error ? error.message : error).replace(/^Error:\s*/, "").slice(0, 200);
+      return ctx.answerCallbackQuery(`${t(locale, "publishFailed")}\nℹ️ ${reason}`, { show_alert: true });
     }
     let post;
     try {

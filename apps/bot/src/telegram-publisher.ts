@@ -105,12 +105,20 @@ function premiumCaption(input: PublishInput): string {
 }
 
 // Phase 3 (link previews): Telegram shows a large webpage preview ABOVE the text when
-// prefer_large_media is set with an optional caption (Bot API 9.x). Only meaningful for
+// a link-bearing post asks for it (Bot API LinkPreviewOptions). Only meaningful for
 // link-bearing posts WITHOUT media — a photo/video message already owns the visual slot,
-// and forcing both flags there would fight the card. Older servers ignore unknown fields.
+// and forcing a preview there would fight the card.
+// Publish-flow fix: the payload previously used `prefer_large_media` /
+// `show_caption_above_media`, which are NOT fields of LinkPreviewOptions —
+// strict Telegram servers answered 400 Bad Request and every link post failed
+// to publish. Valid fields per the Bot API: url, is_disabled, prefer_large_text,
+// prefer_small_text, show_in_caption_above_media.
 function linkPreviewOptions(input: PublishInput, hasMediaOrCard: boolean): Record<string, unknown> | undefined {
   if (!input.preferLargePreview || !input.linkUrl?.trim() || hasMediaOrCard) return undefined;
-  return { prefer_large_media: true, show_caption_above_media: input.captionAbove === true };
+  return {
+    prefer_large_text: true,
+    ...(input.captionAbove === true ? { show_in_caption_above_media: true } : {}),
+  };
 }
 
 /**
@@ -139,7 +147,13 @@ export function requiredFactFieldsFor(category: string): FactFieldSpec[] {
 }
 
 export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{ chatId: string; messageId: number }> {
-  if (!env.GENZI_CHANNEL_ID) throw new Error("GENZI_CHANNEL_ID is not configured");
+  // Diagnostics fix (publish-flow audit): the wizard showed a generic
+  // "Publishing failed" for every error. Tag each failure class so logs AND
+  // the author's reply say WHY the post did not ship.
+  if (!env.GENZI_CHANNEL_ID) {
+    logger.error("publish blocked: GENZI_CHANNEL_ID is not configured", { category: input.category });
+    throw new Error("GENZI_CHANNEL_ID is not configured — set it in the bot environment (.env) and restart");
+  }
   // Enforcement gate (Phase 1.1 layout table + Phase 5 anti-drift rule): a
   // structural category with missing required fact fields CANNOT publish. This
   // throws BEFORE any Telegram call, so a half-filled fact block never reaches
@@ -171,6 +185,28 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
   // must never render, and the full premium caption (with the category chip header)
   // is the fallback surface. Complete posts keep their media untouched.
   let hasMedia = (input.mediaType === "image" || input.mediaType === "video") && Boolean(input.mediaFileId);
+
+  // Diagnostics fix (publish-flow audit): classify Telegram API failures into
+  // human-readable reasons ONCE, before any send — previously every error
+  // surfaced to the author as a generic "Publishing failed" with no reason,
+  // hiding the two most common causes (bad GENZI_CHANNEL_ID, bot not admin).
+  const describeTelegramError = (error: unknown): string => {
+    const text = String(error);
+    if (text.includes("chat not found")) return "channel chat not found — check GENZI_CHANNEL_ID";
+    if (text.includes("bot is not a member") || text.includes("KICKED") || text.includes("not enough rights") || text.includes("CHAT_ADMIN")) return "the bot is not an admin of the GENZI channel — promote it and retry";
+    if (text.includes("400") || text.includes("Bad Request")) return `Telegram rejected the payload (${text.slice(0, 160)})`;
+    return text.slice(0, 160);
+  };
+  // Wrap a Telegram send so its failure throws an actionable message AND logs.
+  const guardedSend = async <T>(label: string, send: () => Promise<T>): Promise<T> => {
+    try {
+      return await send();
+    } catch (error) {
+      logger.error(`channel send failed (${label})`, { error: String(error) });
+      throw new Error(`publish failed: ${describeTelegramError(error)}`);
+    }
+  };
+
   // Effective facts (defaults + wizard answers + legacy location mapping) computed ONCE,
   // after the gate passed — every render path below consumes these so preview == channel.
   const publishInput: PublishInput = { ...input, factValues: effectivePublishFacts(input) };
@@ -181,6 +217,13 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
     publishInput.preferLargePreview = true;
   }
   const caption = premiumCaption(publishInput);
+
+  // TDZ fix (publish-flow audit): `hasVideo` used to be declared AFTER
+  // `sendPhotoOrVideo`, which referenced it — a video post with a generated
+  // card path could hit the temporal dead zone depending on engine behavior.
+  // Declared before both consumers now, so every send route reads an
+  // initialized value. Videos are always file_ids and never replaced by a card.
+  const hasVideo = input.mediaType === "video";
 
   // ---- Phase 2: branded card ------------------------------------------------
   // Behavior contract (plan §2.3):
@@ -216,9 +259,10 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
     const opts: Record<string, unknown> = html ? { caption: cap, parse_mode: "HTML" } : { caption: cap };
     if (input.captionAbove === true) opts.show_caption_above_media = true;
     // Large link preview alongside a photo caption (Phase 3): only when the post also
-    // carries an official platform link — prefer_large_media keeps it big, not a strip.
+    // carries an official platform link. Same valid LinkPreviewOptions fields as the
+    // text path — `prefer_large_media` is not part of the API and caused 400s.
     if (publishInput.preferLargePreview && publishInput.linkUrl?.trim()) {
-      opts.link_preview_options = { prefer_large_media: true, show_caption_above_media: input.captionAbove === true };
+      opts.link_preview_options = linkPreviewOptions(publishInput, false);
     }
     // A rendered card is a raw PNG buffer — grammY only accepts buffers via InputFile.
     // file_id strings (author media) pass through untouched. Videos are always file_ids.
@@ -227,7 +271,6 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
       ? bot.api.sendVideo(channel, source as string, opts as never)
       : bot.api.sendPhoto(channel, payload, opts as never);
   };
-  const hasVideo = input.mediaType === "video" && !cardBuffer;
 
   // Phase 4 (plan §Reactions): seed the branded reaction set on the published post.
   // setMessageReaction is a bot privilege on its OWN channel messages — it displays the
@@ -256,7 +299,7 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
       // HTML parse failure on user content: retry once with the plain-text twin.
       logger.warn("channel caption HTML rejected, falling back to plain text", { error: String(error) });
       const plain = buildChannelCaptionPlain({ ...publishInput, readingMinutes: publishInput.readingMinutes ?? 1, publishedAt: new Date() }).slice(0, CAPTION_LIMIT);
-      const msg = await sendPhotoOrVideo(source, plain, false);
+      const msg = await guardedSend("media caption (plain fallback)", () => sendPhotoOrVideo(source, plain, false));
       void seedReactions(msg.message_id);
       return { chatId: String(channel), messageId: msg.message_id };
     }
@@ -271,7 +314,9 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
     } catch (error) {
       logger.warn("channel message HTML rejected, falling back to plain text", { error: String(error) });
       const plain = buildChannelCaptionPlain({ ...publishInput, readingMinutes: publishInput.readingMinutes ?? 1, publishedAt: new Date() }).slice(0, 4000);
-      const msg = await bot.api.sendMessage(channel, plain, previewOpts ? { link_preview_options: previewOpts as never } : undefined);
+      const msg = await guardedSend("text post (plain fallback)", () =>
+        bot.api.sendMessage(channel, plain, previewOpts ? { link_preview_options: previewOpts as never } : undefined),
+      );
       void seedReactions(msg.message_id);
       return { chatId: String(channel), messageId: msg.message_id };
     }
@@ -308,20 +353,25 @@ export async function publishToChannel(bot: Bot, input: PublishInput): Promise<{
   const rest = [...restChunks, parts.hiddenBody].filter(Boolean).join("\n\n");
   const more = rest ? "\n\n<i>…continued below ↓</i>" : "";
   const firstChunk = `${parts.head}\n\n${firstBody}${more}${parts.tail}`;
-  let firstId: number;
-  if (hasMedia) {
-    const msg = await sendPhotoOrVideo(cardBuffer ?? (input.mediaFileId as string), firstChunk.slice(0, CAPTION_LIMIT), true);
-    firstId = msg.message_id;
-  } else {
-    const previewOpts = linkPreviewOptions(publishInput, false);
-    const msg = await bot.api.sendMessage(channel, firstChunk, { parse_mode: "HTML", ...(previewOpts ? { link_preview_options: previewOpts as never } : {}) });
-    firstId = msg.message_id;
-  }
+  // Long-post path shares the same diagnostics funnel (publish-flow audit):
+  // a failure here previously threw the raw grammY error with no context.
+  const firstMsg = await guardedSend("long post (first message)", () =>
+    hasMedia
+      ? sendPhotoOrVideo(cardBuffer ?? (input.mediaFileId as string), firstChunk.slice(0, CAPTION_LIMIT), true)
+      : (() => {
+          const previewOpts = linkPreviewOptions(publishInput, false);
+          return bot.api.sendMessage(channel, firstChunk, { parse_mode: "HTML", ...(previewOpts ? { link_preview_options: previewOpts as never } : {}) });
+        })(),
+  );
+  const firstId = firstMsg.message_id;
   for (const chunk of splitText(rest, TEXT_CHUNK)) {
     if (!chunk) continue;
-    await bot.api.sendMessage(channel, chunk, {
-      reply_parameters: { message_id: firstId, allow_sending_without_reply: true },
-    });
+    // A continuation that fails must not silently truncate the post — surface it.
+    await guardedSend("long post (continuation)", () =>
+      bot.api.sendMessage(channel, chunk, {
+        reply_parameters: { message_id: firstId, allow_sending_without_reply: true },
+      }),
+    );
   }
   void seedReactions(firstId);
   return { chatId: String(channel), messageId: firstId };
